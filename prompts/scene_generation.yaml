@@ -1,0 +1,64 @@
+prompts:
+  - id: script_analysis
+    name: 剧本分析
+    description: 分析剧本结构、提取资产、识别场景
+    category: analysis
+    variables:
+      - script
+      - duration
+    content: |
+      你是一位资深导演，请分析以下剧本：
+
+      {{script}}
+
+      请完成以下任务：
+      1. 提取所有角色、场景、道具
+      2. 分析剧本结构（如有STC节拍请识别）
+      3. 估算总时长：{{duration}}秒
+      4. 给出分镜数量建议
+
+      输出JSON格式：
+      {
+        "characters": ["角色1", "角色2"],
+        "scenes": ["场景1", "场景2"],
+        "props": ["道具1", "道具2"],
+        "structure": "描述",
+        "estimatedShots": 数字
+      }
+
+  - id: scene_generation
+    name: 场次生成
+    description: 生成单场次的分镜表
+    category: scene
+    variables:
+      - sceneNumber
+      - sceneContent
+      - directorStyle
+      - visualStyle
+      - bridgeState
+      - duration
+    content: |
+      你是一位执行导演，请为第{{sceneNumber}}场生成详细分镜表。
+
+      本场剧本内容：
+      {{sceneContent}}
+
+      导演风格：{{directorStyle}}
+      视觉风格：{{visualStyle}}
+      本场时长：{{duration}}秒
+
+      {{#if bridgeState}}
+      视觉桥梁（承接上一场）：
+      - 角色位置：{{bridgeState.charPosition}}
+      - 光线状态：{{bridgeState.lightPhase}}
+      - 环境状态：{{bridgeState.environment}}
+      - 关键道具：{{bridgeState.keyProp}}
+      {{/if}}
+
+      输出要求：
+      1. 严格按六字段输出每镜
+      2. 时间轴必须无缝衔接
+      3. 台词逐字保留
+
+      六字段格式：
+      镜头|环境|角色分动|细节|光影|音效|台词
