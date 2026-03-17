@@ -20,6 +20,7 @@ import {
   FileText,
   Clapperboard,
   Layers,
+  Shield,
 } from "lucide-react"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Button } from "@/components/ui/button"
@@ -262,13 +263,14 @@ function EditorPageInner() {
               <div className="p-5 space-y-5">
 
                 {/* 导演选择 - 分类 Tab */}
-                <div className="rounded-xl border border-border bg-card/50 p-4 space-y-3">
-                  <div className="flex items-center gap-2">
+                <div className="rounded-xl border border-border bg-card/50 overflow-hidden">
+                  <div className="px-4 py-2.5 bg-muted/50 border-b border-border flex items-center gap-2">
                     <Sparkles className="w-4 h-4 text-amber-500" />
                     <span className="text-sm font-medium">导演风格</span>
                   </div>
-                  {/* 分类标签 */}
-                  <div className="flex gap-2">
+                  <div className="p-4 space-y-3">
+                    {/* 分类标签 */}
+                    <div className="flex gap-2">
                     {directorCategories.map((cat) => (
                       <button
                         key={cat}
@@ -305,171 +307,189 @@ function EditorPageInner() {
                     ))}
                   </div>
                 </div>
+              </div>
 
                 {/* 生成参数 */}
-                <div className="rounded-xl border border-border bg-card/50 p-4 space-y-3">
-                  <div className="text-sm font-medium">生成参数</div>
-                  <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-                    {/* 时长 */}
-                    <div className="space-y-2 col-span-2 lg:col-span-1">
-                      <div className="flex items-center gap-1.5">
-                        <Clock className="w-3.5 h-3.5 text-muted-foreground" />
-                        <Label className="text-xs">总时长</Label>
+                <div className="rounded-xl border border-border bg-card/50 overflow-hidden">
+                  <div className="px-4 py-2.5 bg-muted/50 border-b border-border flex items-center gap-2">
+                    <Settings className="w-4 h-4 text-amber-500" />
+                    <span className="text-sm font-medium">生成参数</span>
+                  </div>
+                  <div className="p-4 space-y-3">
+                    <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+                      {/* 时长 */}
+                      <div className="space-y-2 col-span-2 lg:col-span-1">
+                        <div className="flex items-center gap-1.5">
+                          <Clock className="w-3.5 h-3.5 text-muted-foreground" />
+                          <Label className="text-xs">总时长</Label>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Slider
+                            value={[project.duration]}
+                            onValueChange={(value) => {
+                              const v = Array.isArray(value) ? value[0] : value
+                              setProject((p) => ({ ...p, duration: v }))
+                            }}
+                            max={300}
+                            min={10}
+                            step={5}
+                            className="flex-1"
+                          />
+                          <span className="text-xs text-muted-foreground w-10 text-right">{project.duration}s</span>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <Slider
-                          value={[project.duration]}
-                          onValueChange={(value) => {
-                            const v = Array.isArray(value) ? value[0] : value
-                            setProject((p) => ({ ...p, duration: v }))
-                          }}
-                          max={300}
-                          min={10}
-                          step={5}
-                          className="flex-1"
-                        />
-                        <span className="text-xs text-muted-foreground w-10 text-right">{project.duration}s</span>
-                      </div>
-                    </div>
 
-                    {/* 镜头模式 */}
-                    <div className="space-y-2">
-                      <Label className="text-xs">镜头模式</Label>
-                      <Select defaultValue={project.shotMode}>
-                        <SelectTrigger className="h-8 text-xs">
-                          <SelectValue placeholder="选择模式" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="auto">自动</SelectItem>
-                          <SelectItem value="custom">自定义</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    {/* 视觉风格 */}
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-1.5">
-                        <Palette className="w-3.5 h-3.5 text-muted-foreground" />
-                        <Label className="text-xs">视觉风格</Label>
+                      {/* 镜头模式 */}
+                      <div className="space-y-2">
+                        <Label className="text-xs">镜头模式</Label>
+                        <Select defaultValue={project.shotMode}>
+                          <SelectTrigger className="h-8 text-xs">
+                            <SelectValue placeholder="选择模式" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="auto">自动</SelectItem>
+                            <SelectItem value="custom">自定义</SelectItem>
+                          </SelectContent>
+                        </Select>
                       </div>
-                      <Select
-                        value={project.visualStyle}
-                        onValueChange={(v) => setProject((p) => ({ ...p, visualStyle: v as any }))}
-                      >
-                        <SelectTrigger className="h-8 text-xs">
-                          <SelectValue placeholder="选择风格" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="cinematic">电影感</SelectItem>
-                          <SelectItem value="anime">动漫风</SelectItem>
-                          <SelectItem value="cyberpunk">赛博朋克</SelectItem>
-                          <SelectItem value="oil_painting">油画</SelectItem>
-                          <SelectItem value="3d_render">3D渲染</SelectItem>
-                          <SelectItem value="vintage">复古</SelectItem>
-                          <SelectItem value="watercolor">水彩</SelectItem>
-                          <SelectItem value="pixel_art">像素</SelectItem>
-                          <SelectItem value="comic">漫画</SelectItem>
-                          <SelectItem value="claymation">粘土</SelectItem>
-                          <SelectItem value="ukiyoe">浮世绘</SelectItem>
-                          <SelectItem value="surreal">超现实</SelectItem>
-                          <SelectItem value="minimalist">极简</SelectItem>
-                          <SelectItem value="noir">黑色电影</SelectItem>
-                          <SelectItem value="fantasy">奇幻</SelectItem>
-                          <SelectItem value="steampunk">蒸汽朋克</SelectItem>
-                          <SelectItem value="donghua_xianxia">国漫仙侠</SelectItem>
-                          <SelectItem value="ink_wash">水墨</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
 
-                    {/* 画幅 */}
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-1.5">
-                        <Maximize className="w-3.5 h-3.5 text-muted-foreground" />
-                        <Label className="text-xs">画幅比例</Label>
+                      {/* 视觉风格 */}
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-1.5">
+                          <Palette className="w-3.5 h-3.5 text-muted-foreground" />
+                          <Label className="text-xs">视觉风格</Label>
+                        </div>
+                        <Select
+                          value={project.visualStyle}
+                          onValueChange={(v) => setProject((p) => ({ ...p, visualStyle: v as any }))}
+                        >
+                          <SelectTrigger className="h-8 text-xs">
+                            <SelectValue placeholder="选择风格" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="cinematic">电影感</SelectItem>
+                            <SelectItem value="anime">动漫风</SelectItem>
+                            <SelectItem value="cyberpunk">赛博朋克</SelectItem>
+                            <SelectItem value="oil_painting">油画</SelectItem>
+                            <SelectItem value="3d_render">3D渲染</SelectItem>
+                            <SelectItem value="vintage">复古</SelectItem>
+                            <SelectItem value="watercolor">水彩</SelectItem>
+                            <SelectItem value="pixel_art">像素</SelectItem>
+                            <SelectItem value="comic">漫画</SelectItem>
+                            <SelectItem value="claymation">粘土</SelectItem>
+                            <SelectItem value="ukiyoe">浮世绘</SelectItem>
+                            <SelectItem value="surreal">超现实</SelectItem>
+                            <SelectItem value="minimalist">极简</SelectItem>
+                            <SelectItem value="noir">黑色电影</SelectItem>
+                            <SelectItem value="fantasy">奇幻</SelectItem>
+                            <SelectItem value="steampunk">蒸汽朋克</SelectItem>
+                            <SelectItem value="donghua_xianxia">国漫仙侠</SelectItem>
+                            <SelectItem value="ink_wash">水墨</SelectItem>
+                          </SelectContent>
+                        </Select>
                       </div>
-                      <Select
-                        value={project.aspectRatio}
-                        onValueChange={(v) => setProject((p) => ({ ...p, aspectRatio: v as any }))}
-                      >
-                        <SelectTrigger className="h-8 text-xs">
-                          <SelectValue placeholder="选择画幅" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="16:9">16:9 宽屏</SelectItem>
-                          <SelectItem value="2.39:1">2.39:1 电影</SelectItem>
-                          <SelectItem value="9:16">9:16 竖屏</SelectItem>
-                          <SelectItem value="1:1">1:1 方形</SelectItem>
-                          <SelectItem value="4:3">4:3 经典</SelectItem>
-                          <SelectItem value="21:9">21:9 超宽</SelectItem>
-                          <SelectItem value="3:2">3:2 摄影</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
 
-                    {/* 质量 */}
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-1.5">
-                        <Layers className="w-3.5 h-3.5 text-muted-foreground" />
-                        <Label className="text-xs">质量档位</Label>
+                      {/* 画幅 */}
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-1.5">
+                          <Maximize className="w-3.5 h-3.5 text-muted-foreground" />
+                          <Label className="text-xs">画幅比例</Label>
+                        </div>
+                        <Select
+                          value={project.aspectRatio}
+                          onValueChange={(v) => setProject((p) => ({ ...p, aspectRatio: v as any }))}
+                        >
+                          <SelectTrigger className="h-8 text-xs">
+                            <SelectValue placeholder="选择画幅" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="16:9">16:9 宽屏</SelectItem>
+                            <SelectItem value="2.39:1">2.39:1 电影</SelectItem>
+                            <SelectItem value="9:16">9:16 竖屏</SelectItem>
+                            <SelectItem value="1:1">1:1 方形</SelectItem>
+                            <SelectItem value="4:3">4:3 经典</SelectItem>
+                            <SelectItem value="21:9">21:9 超宽</SelectItem>
+                            <SelectItem value="3:2">3:2 摄影</SelectItem>
+                          </SelectContent>
+                        </Select>
                       </div>
-                      <Select
-                        value={project.quality}
-                        onValueChange={(v) => setProject((p) => ({ ...p, quality: v as any }))}
-                      >
-                        <SelectTrigger className="h-8 text-xs">
-                          <SelectValue placeholder="选择质量" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="extreme_high">极高</SelectItem>
-                          <SelectItem value="high">高</SelectItem>
-                          <SelectItem value="medium">中</SelectItem>
-                          <SelectItem value="low">低</SelectItem>
-                        </SelectContent>
-                      </Select>
+
+                      {/* 质量 */}
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-1.5">
+                          <Layers className="w-3.5 h-3.5 text-muted-foreground" />
+                          <Label className="text-xs">质量档位</Label>
+                        </div>
+                        <Select
+                          value={project.quality}
+                          onValueChange={(v) => setProject((p) => ({ ...p, quality: v as any }))}
+                        >
+                          <SelectTrigger className="h-8 text-xs">
+                            <SelectValue placeholder="选择质量" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="extreme_high">极高</SelectItem>
+                            <SelectItem value="high">高</SelectItem>
+                            <SelectItem value="medium">中</SelectItem>
+                            <SelectItem value="low">低</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
                     </div>
                   </div>
                 </div>
 
                 {/* 功能开关 */}
-                <div className="rounded-xl border border-border bg-card/50 p-4">
-                  <div className="text-sm font-medium mb-3">功能开关</div>
-                  <div className="grid grid-cols-3 lg:grid-cols-5 gap-4">
-                    <label className="flex items-center justify-between gap-2 cursor-pointer">
-                      <span className="text-xs">背景音乐</span>
-                      <Switch
-                        checked={project.enableBGM}
-                        onCheckedChange={(v) => setProject((p) => ({ ...p, enableBGM: v }))}
-                      />
-                    </label>
-                    <label className="flex items-center justify-between gap-2 cursor-pointer">
-                      <span className="text-xs">字幕</span>
-                      <Switch
-                        checked={project.enableSubtitle}
-                        onCheckedChange={(v) => setProject((p) => ({ ...p, enableSubtitle: v }))}
-                      />
-                    </label>
-                    <label className="flex items-center justify-between gap-2 cursor-pointer">
-                      <span className="text-xs">敏感词过滤</span>
-                      <Switch
-                        checked={project.enableWordFilter}
-                        onCheckedChange={(v) => setProject((p) => ({ ...p, enableWordFilter: v }))}
-                      />
-                    </label>
-                    <label className="flex items-center justify-between gap-2 cursor-pointer">
-                      <span className="text-xs">安全预检</span>
-                      <Switch
-                        checked={project.autoSafetyCheck}
-                        onCheckedChange={(v) => setProject((p) => ({ ...p, autoSafetyCheck: v }))}
-                      />
-                    </label>
-                    <label className="flex items-center justify-between gap-2 cursor-pointer">
-                      <span className="text-xs">STC节拍</span>
-                      <Switch
-                        checked={project.stcEnabled}
-                        onCheckedChange={(v) => setProject((p) => ({ ...p, stcEnabled: v }))}
-                      />
-                    </label>
+                <div className="rounded-xl border border-border bg-card/50 overflow-hidden">
+                  <div className="px-4 py-2.5 bg-muted/50 border-b border-border flex items-center gap-2">
+                    <Shield className="w-4 h-4 text-amber-500" />
+                    <span className="text-sm font-medium">功能开关</span>
+                  </div>
+                  <div className="p-4">
+                    <div className="grid grid-cols-3 lg:grid-cols-6 gap-4">
+                      <label className="flex items-center justify-between gap-2 cursor-pointer">
+                        <span className="text-xs">背景音乐</span>
+                        <Switch
+                          checked={project.enableBGM}
+                          onCheckedChange={(v) => setProject((p) => ({ ...p, enableBGM: v }))}
+                        />
+                      </label>
+                      <label className="flex items-center justify-between gap-2 cursor-pointer">
+                        <span className="text-xs">字幕</span>
+                        <Switch
+                          checked={project.enableSubtitle}
+                          onCheckedChange={(v) => setProject((p) => ({ ...p, enableSubtitle: v }))}
+                        />
+                      </label>
+                      <label className="flex items-center justify-between gap-2 cursor-pointer">
+                        <span className="text-xs">敏感词过滤</span>
+                        <Switch
+                          checked={project.enableWordFilter}
+                          onCheckedChange={(v) => setProject((p) => ({ ...p, enableWordFilter: v }))}
+                        />
+                      </label>
+                      <label className="flex items-center justify-between gap-2 cursor-pointer">
+                        <span className="text-xs">安全预检</span>
+                        <Switch
+                          checked={project.autoSafetyCheck}
+                          onCheckedChange={(v) => setProject((p) => ({ ...p, autoSafetyCheck: v }))}
+                        />
+                      </label>
+                      <label className="flex items-center justify-between gap-2 cursor-pointer">
+                        <span className="text-xs">严格模式</span>
+                        <Switch
+                          checked={project.strictMode}
+                          onCheckedChange={(v) => setProject((p) => ({ ...p, strictMode: v }))}
+                        />
+                      </label>
+                      <label className="flex items-center justify-between gap-2 cursor-pointer">
+                        <span className="text-xs">STC节拍</span>
+                        <Switch
+                          checked={project.stcEnabled}
+                          onCheckedChange={(v) => setProject((p) => ({ ...p, stcEnabled: v }))}
+                        />
+                      </label>
+                    </div>
                   </div>
                 </div>
               </div>

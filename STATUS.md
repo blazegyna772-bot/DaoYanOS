@@ -7,15 +7,6 @@
 - **技术栈**：Next.js 15 + React 19 + TypeScript 5 + Tailwind CSS 4 + shadcn/ui
 - **存储**：本地文件系统 (~/Documents/DaoYanOSProjects/)
 
-## 核心功能（已完成类型定义）
-- ✅ 39位导演数据 (src/mock/directors.ts)
-- ✅ 5种导演分类人格 (narrative/atmosphere/suspense/anime/stcOff)
-- ✅ 13节拍结构 (BS2/STC)
-- ✅ @Tag资产系统 (@人物1/@图片1/@道具1)
-- ✅ ChainEngine 分集生成架构
-- ✅ Visual Bridge 跨场次连续性
-- ✅ 保真模式 / 安全审核系统
-
 ## 当前文件状态
 
 ### ✅ 存在的关键文件
@@ -25,63 +16,60 @@ next.config.ts                  (已重建)
 tailwind.config.ts              (已重建)
 tsconfig.json                   (已重建)
 next-env.d.ts
-src/types/index.ts              (完整类型定义)
+src/types/index.ts              (完整类型定义，已添加 strictMode)
 src/mock/directors.ts           (39位导演)
-src/mock/projects.ts            (示例项目+分集结构)
+src/mock/projects.ts            (示例项目+分集结构，已添加 strictMode)
 src/mock/index.ts
 src/app/layout.tsx              (已重建)
 src/app/globals.css             (已重建)
-src/app/error.tsx
-src/app/not-found.tsx
-src/app/global-error.tsx
-src/app/editor/page.tsx         (完整编辑器页面)
+src/app/page.tsx                (项目管理主页)
+src/app/editor/page.tsx         (编辑器页面 - 当前有语法错误)
 src/app/settings/page.tsx       (设置页面)
 src/lib/utils.ts
-src/components/ui/input.tsx
-src/components/ui/select.tsx
-src/components/ui/separator.tsx
-src/components/ui/slider.tsx
-src/components/ui/textarea.tsx
-```
-
-### ❌ 丢失的文件（需重建）
-```
-src/app/page.tsx                (项目管理主页 - 丢失)
-src/components/ui/button.tsx    (shadcn)
-src/components/ui/card.tsx      (shadcn)
-src/components/ui/badge.tsx     (shadcn)
-src/components/ui/tabs.tsx      (shadcn)
-src/components/ui/switch.tsx    (shadcn)
-src/components/ui/label.tsx     (shadcn)
-src/components/ui/scroll-area.tsx (shadcn)
+src/components/ui/button.tsx
+src/components/ui/card.tsx
+src/components/ui/badge.tsx
+src/components/ui/tabs.tsx
+src/components/ui/switch.tsx
+src/components/ui/label.tsx
+src/components/ui/scroll-area.tsx
 src/components/ui/dropdown-menu.tsx
-src/components/theme-toggle.tsx (主题切换组件)
+src/components/theme-toggle.tsx
 src/components/theme-provider.tsx
 ```
 
-## 下一步任务
+### ⚠️ 待修复问题
+1. **src/app/editor/page.tsx 有语法错误** - div 标签不匹配（多开了3个 div）
+2. **标签背景样式** - 需要给三个参数区块添加带背景的标题栏（导演风格、生成参数、功能开关）
+3. **严格模式开关** - 需要在功能开关区块添加"严格模式"选项
 
-1. **安装缺失的 shadcn 组件**
+## GitHub 仓库
+- **地址**: https://github.com/blazegyna772-bot/DaoYanOS
+- **最新提交**: "Add strictMode to Project type and mock data"
+- **状态**: 代码已推送
+
+## 本地服务器
+- **状态**: 需要重启
+- **端口**: 3000
+- **启动命令**: `npm run dev`
+
+## 下一步任务（重启后）
+
+1. **修复编辑器页面语法错误**
    ```bash
-   npx shadcn@latest add button card badge tabs switch label scroll-area dropdown-menu
+   # 检查错误
+   npm run build
+
+   # 错误位置：src/app/editor/page.tsx 行493附近
+   # 问题：div 标签不匹配，多开了3个 div 没有闭合
    ```
 
-2. **重建 theme-toggle.tsx**
-   - 使用 next-themes
-   - 支持 light/dark/system 三种模式
-   - 使用 lucide-react 图标 (Sun, Moon, Monitor)
+2. **添加标签背景样式**（三个区块）
+   - 导演风格区块
+   - 生成参数区块
+   - 功能开关区块（添加严格模式）
 
-3. **重建 theme-provider.tsx**
-   - 包裹 ThemeProvider
-   - 属性: attribute="class", defaultTheme="dark"
-
-4. **重建 page.tsx (项目管理主页)**
-   - 顶部导航栏（Logo + ThemeToggle）
-   - 项目网格卡片展示
-   - 新建项目按钮
-   - 点击进入编辑器 /editor?id={projectId}
-
-5. **运行构建验证**
+3. **运行测试**
    ```bash
    npm run build
    npm run dev
@@ -89,41 +77,14 @@ src/components/theme-provider.tsx
 
 ## 数据结构参考
 
-### Project 接口
+### Project 接口（已更新）
 ```typescript
 interface Project {
-  id: string;
-  name: string;
-  plotInput: string;
-  charCount: number;
-  isScriptImported: boolean;
-  duration: number;
-  shotMode: "auto" | "custom";
-  selectedDirector: string;
-  visualStyle: VisualStyle;
-  aspectRatio: AspectRatio;
-  quality: Quality;
-  enableBGM: boolean;
-  enableSubtitle: boolean;
-  scriptFaithfulMode: boolean;
-  enableWordFilter: boolean;
-  autoSafetyCheck: boolean;
-  stcEnabled: boolean;
-  assets: AssetState;
-  currentPlatformId: string;
-  platforms: PlatformConfig[];
-  episodes: Episode[];  // 分集数据
-}
-```
-
-### Episode 接口
-```typescript
-interface Episode {
-  id: string;
-  name: string;
-  plotInput: string;
-  scenes: Scene[];
-  shots: Shot[];
+  // ...其他字段
+  enableWordFilter: boolean;   // 敏感词过滤
+  autoSafetyCheck: boolean;    // 生成前自动安检
+  strictMode: boolean;         // 严格模式（新增）
+  stcEnabled: boolean;         // STC节拍结构
 }
 ```
 
@@ -132,3 +93,10 @@ interface Episode {
 - _Input/1st/SOULLENS_MODULE_ANALYSIS.md
 - _Input/1st/SOULLENS_PARAMETER_DICTIONARY.md
 - _Input/1st/soullensV5.1.html (原始源码)
+
+## 重启后步骤
+1. 启动 VSCode
+2. 打开终端
+3. 运行 `cd /Users/HadiLau/Desktop/Projects/DaoYanOS && npm run dev`
+4. 浏览器访问 http://localhost:3000
+5. 告诉我继续修复编辑器页面
