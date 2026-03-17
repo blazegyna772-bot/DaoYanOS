@@ -312,6 +312,7 @@ export interface Project {
   scriptFaithfulMode: boolean; // 主动保真模式
   enableWordFilter: boolean;   // 敏感词过滤
   autoSafetyCheck: boolean;    // 生成前自动安检
+  strictMode: boolean;         // 严格模式（严格安全检测）
   stcEnabled: boolean;         // STC节拍结构
 
   // ===== 资产库 =====

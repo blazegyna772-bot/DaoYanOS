@@ -24,6 +24,7 @@ export const mockProjects: Project[] = [
     scriptFaithfulMode: false,
     enableWordFilter: true,
     autoSafetyCheck: true,
+    strictMode: false,
     stcEnabled: true,
     assets: {
       character: [
@@ -390,6 +391,7 @@ export function createEmptyProject(): Project {
     scriptFaithfulMode: false,
     enableWordFilter: true,
     autoSafetyCheck: true,
+    strictMode: false,
     stcEnabled: true,
     assets: {
       character: [],
