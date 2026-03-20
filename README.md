@@ -158,4 +158,4 @@ DaoYanOS/
 
 ## License
 
-Copyright © 2025 QiYing. All rights reserved.
+Copyright © 2025 QiYing. All rights reserved.参考soullens 5.0.HTML源码,仅供学习研究.
