@@ -1,0 +1,79 @@
+# 视觉风格定义
+# 每个风格包含：id（英文标识）和 description（中文描述）
+# 用于注入分镜生成提示词中的"视觉基调"部分
+
+visualStyles:
+  cinematic:
+    name: 电影写实
+    description: 电影写实，追求极致的真实感和电影质感
+
+  anime:
+    name: 日式动漫
+    description: 日式动漫，线条清晰，色彩明快，具有二次元感
+
+  cyberpunk:
+    name: 赛博朋克
+    description: 赛博朋克，霓虹灯光，高对比度，科技感十足
+
+  oil_painting:
+    name: 油画质感
+    description: 油画质感，笔触明显，色彩浓郁，艺术感强
+
+  3d_render:
+    name: 3D渲染
+    description: 3D渲染效果，虚幻引擎质感，模型精细
+
+  vintage:
+    name: 复古胶片
+    description: 复古胶片，颗粒感强，色调怀旧
+
+  watercolor:
+    name: 水彩手绘
+    description: 水彩手绘，边缘晕染，清透唯美
+
+  pixel_art:
+    name: 像素艺术
+    description: 像素艺术，复古游戏感，点阵清晰
+
+  comic:
+    name: 美式漫画
+    description: 美式漫画，粗犷线条，张力十足
+
+  claymation:
+    name: 黏土定格
+    description: 黏土定格动画，手工质感
+
+  ukiyoe:
+    name: 浮世绘
+    description: 浮世绘风格，传统日本艺术感
+
+  surreal:
+    name: 超现实主义
+    description: 超现实主义，梦幻且怪诞
+
+  minimalist:
+    name: 极简主义
+    description: 极简主义，画面干净，大量留白
+
+  noir:
+    name: 黑色电影
+    description: 黑色电影，黑白高对比，阴影深邃
+
+  fantasy:
+    name: 奇幻魔幻
+    description: 奇幻魔幻，色彩绚丽，充满魔法感
+
+  steampunk:
+    name: 蒸汽朋克
+    description: 蒸汽朋克，齿轮机械，黄铜色调
+
+  donghua_xianxia:
+    name: 国漫修仙
+    description: 中国3D修仙国漫风格，角色精细建模，东方仙侠美学，灵气流光粒子特效，仙山浮云宏大场景，飘逸发丝与华服
+
+  ink_wash:
+    name: 水墨画
+    description: 中国传统水墨画风格，笔墨晕染，留白意境，山水写意，丹青设色，东方古典美学，如宋元山水意境
+
+# 默认风格
+defaultStyle: cinematic

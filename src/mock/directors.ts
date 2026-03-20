@@ -456,9 +456,10 @@ export const directors: Director[] = [
     color: "from-sky-500 to-indigo-700",
     category: "anime",
     donghuaProfile: {
-      style: "3D精模人物、丝绸材质飘逸发丝、瞳孔流光、面容精致立体",
-      lens: "东方仙侠世界观、浮空仙山、灵脉山河、古朴宗门建筑",
-      color: "炫彩法术光效、灵力云雾、仙诀手印、飞剑如流星",
+      charStyle: "3D精模人物、丝绸材质飘逸发丝、瞳孔流光、面容精致立体",
+      worldStyle: "东方仙侠世界观、浮空仙山、灵脉山河、古朴宗门建筑",
+      vfxStyle: "炫彩法术光效、灵力云雾、仙诀手印、飞剑如流星",
+      promptSuffix: "东方仙侠美学，灵气流光粒子效果",
     },
   },
 ];

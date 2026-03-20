@@ -1,8 +1,8 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
-import { Plus, Clock, Film, MoreVertical, Copy, Trash2 } from "lucide-react"
+import { Plus, Clock, Film, MoreVertical, Copy, Trash2, Loader2 } from "lucide-react"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Button } from "@/components/ui/button"
 import {
@@ -12,39 +12,45 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { mockProjects, createEmptyProject } from "@/mock/projects"
+import { directors, directorCategoryLabels } from "@/mock/directors"
 import type { Project } from "@/types"
 
 export default function HomePage() {
   const router = useRouter()
-  const [projects, setProjects] = useState<Project[]>(mockProjects)
+  const [projects, setProjects] = useState<Project[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  // 从 API 加载项目列表
+  useEffect(() => {
+    loadProjects()
+  }, [])
+
+  const loadProjects = async () => {
+    try {
+      setIsLoading(true)
+      setError(null)
+      const response = await fetch("/api/projects")
+      if (response.ok) {
+        const data = await response.json()
+        setProjects(data.projects || [])
+      } else {
+        const text = await response.text()
+        console.error("API error:", text)
+        setError("加载项目失败，请检查网络连接")
+      }
+    } catch (err) {
+      console.error("Failed to load projects:", err)
+      setError("加载项目失败，请检查网络连接")
+    } finally {
+      setIsLoading(false)
+    }
+  }
 
   // 获取导演显示名称
   const getDirectorName = (directorId: string) => {
-    const directorMap: Record<string, string> = {
-      wong: "王家卫",
-      nolan: "诺兰",
-      zhang: "张艺谋",
-      cameron: "卡梅隆",
-      villeneuve: "维伦纽瓦",
-      spielberg: "斯皮尔伯格",
-      scorsese: "斯科塞斯",
-      fincher: "芬奇",
-      hitchcock: "希区柯克",
-      tarantino: "昆汀",
-      wook: "朴赞郁",
-      lee: "李安",
-      kurosawa: "黑泽明",
-      miyazaki: "宫崎骏",
-      shinkai: "新海诚",
-      hosoda: "细田守",
-      kon: "今敏",
-      anno: "庵野秀明",
-      takahata: "高畑勋",
-      chow: "周星驰",
-      generic: "标准电影感",
-    }
-    return directorMap[directorId] || directorId
+    const director = directors.find(d => d.id === directorId)
+    return director?.name || directorId
   }
 
   // 格式化日期
@@ -58,11 +64,23 @@ export default function HomePage() {
   }
 
   // 新建项目
-  const handleNewProject = () => {
-    const newProject = createEmptyProject()
-    newProject.name = `新项目 ${projects.length + 1}`
-    setProjects([newProject, ...projects])
-    router.push(`/editor?id=${newProject.id}`)
+  const handleNewProject = async () => {
+    try {
+      const response = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        const newProject = data.project
+        setProjects([newProject, ...projects])
+        router.push(`/editor?id=${newProject.id}`)
+      }
+    } catch (err) {
+      console.error("Failed to create project:", err)
+    }
   }
 
   // 打开项目
@@ -71,25 +89,67 @@ export default function HomePage() {
   }
 
   // 删除项目
-  const handleDeleteProject = (projectId: string, e: React.MouseEvent) => {
+  const handleDeleteProject = async (projectId: string, e: React.MouseEvent) => {
     e.stopPropagation()
-    setProjects(projects.filter((p) => p.id !== projectId))
+    try {
+      const response = await fetch(`/api/projects/${projectId}`, {
+        method: "DELETE",
+      })
+      if (response.ok) {
+        setProjects(projects.filter((p) => p.id !== projectId))
+      }
+    } catch (err) {
+      console.error("Failed to delete project:", err)
+    }
   }
 
   // 复制项目
-  const handleDuplicateProject = (projectId: string, e: React.MouseEvent) => {
+  const handleDuplicateProject = async (projectId: string, e: React.MouseEvent) => {
     e.stopPropagation()
     const project = projects.find((p) => p.id === projectId)
     if (project) {
-      const duplicated: Project = {
-        ...project,
-        id: `proj_${Date.now()}`,
-        name: `${project.name} (副本)`,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+      try {
+        const duplicated: Project = {
+          ...project,
+          id: `proj_${Date.now()}`,
+          name: `${project.name} (副本)`,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }
+        const response = await fetch("/api/projects", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ project: duplicated }),
+        })
+        if (response.ok) {
+          const data = await response.json()
+          setProjects([data.project, ...projects])
+        }
+      } catch (err) {
+        console.error("Failed to duplicate project:", err)
       }
-      setProjects([duplicated, ...projects])
     }
+  }
+
+  // 加载中状态
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <Loader2 className="w-8 h-8 animate-spin text-amber-500" />
+      </div>
+    )
+  }
+
+  // 错误状态
+  if (error) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-muted-foreground mb-4">{error}</p>
+          <Button onClick={loadProjects}>重试</Button>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -249,7 +309,7 @@ export default function HomePage() {
       <footer className="border-t border-border py-6">
         <div className="container mx-auto px-6">
           <p className="text-xs text-muted-foreground text-center">
-            DaoYanOS - SoulLens V5.1 Refactor | 本地优先 · 数据存储于 ~/Documents/DaoYanOSProjects/
+            DaoYanOS · AI导演制作中台 | 本地优先 · 数据存储于 ~/Documents/DaoYanOSProjects/
           </p>
         </div>
       </footer>

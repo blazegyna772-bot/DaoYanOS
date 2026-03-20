@@ -96,9 +96,19 @@ export type BeatType =
 export type AssetType = "character" | "image" | "props";
 
 /**
- * AI平台协议
+ * AI平台协议类型
  */
-export type PlatformMode = "openai" | "gemini";
+export type PlatformMode =
+  | "openai"       // OpenAI 兼容格式
+  | "gemini"       // Google Gemini
+  | "claude"       // Anthropic Claude
+  | "qwen"         // 阿里云通义千问
+  | "doubao"       // 字节豆包
+  | "deepseek"     // DeepSeek
+  | "moonshot"     // 月之暗面 Kimi
+  | "siliconflow"  // 硅基流动
+  | "openrouter"   // OpenRouter
+  | "custom";      // 自定义端点
 
 // ============================================
 // 导演系统
@@ -119,9 +129,10 @@ export interface Director {
   color: string;           // UI渐变色（Tailwind类名）
   category: DirectorCategory;
   donghuaProfile?: {       // 国漫导演特有字段
-    style: string;
-    lens: string;
-    color: string;
+    charStyle: string;     // 角色建模风格
+    worldStyle: string;    // 世界观场景风格
+    vfxStyle: string;      // 特效表现风格
+    promptSuffix: string;  // 提示词后缀
   };
 }
 
@@ -250,14 +261,49 @@ export interface AssetState {
 
 /**
  * AI平台配置
+ * 支持文字生成和视觉分析双模式
  */
 export interface PlatformConfig {
   id: string;
   name: string;
-  endpoint: string;
-  model: string;
+  description?: string;
+  icon?: string;
+  color?: string;
+
+  // 文字生成配置
+  textEndpoint: string;
+  textModel: string;
+  textApiKey: string;
+
+  // 视觉分析配置
+  visionEndpoint: string;
+  visionModel: string;
+  visionApiKey: string;
+
+  // 模式（决定如何格式化请求）
   mode: PlatformMode;
-  apiKey: string;
+
+  // 是否启用
+  enabled: boolean;
+}
+
+/**
+ * 平台定义（用于 UI 展示）
+ */
+export interface PlatformDefinition {
+  id: PlatformMode;
+  name: string;
+  nameEn: string;
+  description: string;
+  icon: string;
+  color: string;
+  recommended: boolean;
+  textModels: string[];
+  visionModels: string[];
+  defaultTextEndpoint: string;
+  defaultVisionEndpoint: string;
+  keyPlaceholder: string;
+  keyUrl: string;
 }
 
 /**

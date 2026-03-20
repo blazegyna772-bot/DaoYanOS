@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "DaoYanOS - AI导演制作中台",
-  description: "SoulLens V5.1 Refactor - 本地优先的AI视频分镜生成工具",
+  description: "本地优先的AI视频分镜生成工具，将剧本转化为AI视频生成平台可用提示词",
 };
 
 export default function RootLayout({
