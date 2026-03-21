@@ -157,6 +157,7 @@ export interface Scene {
   id: string;
   name: string;              // 节拍名（如"催化剂"）
   beatType: BeatType;
+  beatTask?: string;         // 节拍任务（供 Stage B 提示词使用）
   duration: number;          // 本场时长（秒）
   narrativeMode: NarrativeMode;
   contentSummary: string;    // 剧情摘要（Stage A产出）
@@ -178,6 +179,8 @@ export interface Episode {
   plotInput: string;         // 本集剧本文本
   scenes: Scene[];
   shots: Shot[];
+  assetRefs?: EpisodeAssetRefs;
+  generatedMarkdown?: string;
 }
 
 // ============================================
@@ -315,6 +318,14 @@ export interface Episode {
   plotInput: string;
   scenes: Scene[];
   shots: Shot[];
+  assetRefs?: EpisodeAssetRefs;
+  generatedMarkdown?: string;
+}
+
+export interface EpisodeAssetRefs {
+  characterIds: string[];
+  imageIds: string[];
+  propIds: string[];
 }
 
 // ============================================

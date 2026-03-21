@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2019",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "rootDir": ".",
+    "outDir": ".tmp/shot-edit-regression",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "noEmit": false
+  },
+  "include": [
+    "scripts/shot-edit-regression.ts",
+    "src/lib/shotEdit.ts",
+    "src/types/index.ts"
+  ]
+}

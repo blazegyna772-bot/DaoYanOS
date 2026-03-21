@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { promptManager } from "@/lib/promptManager"
+import { reloadPromptConfig } from "@/lib/promptLoader"
 import fs from "fs/promises"
 import path from "path"
 import yaml from "yaml"
@@ -60,6 +61,7 @@ export async function PUT(request: NextRequest) {
 
     // 重新加载配置
     await promptManager.reload()
+    reloadPromptConfig()
 
     return NextResponse.json({ success: true, message: `Updated ${filename}` })
   } catch (error) {
@@ -75,6 +77,7 @@ export async function PUT(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const config = await promptManager.reload()
+    reloadPromptConfig()
     return NextResponse.json({ success: true, config })
   } catch (error) {
     return NextResponse.json({ error: "Failed to reload prompts" }, { status: 500 })

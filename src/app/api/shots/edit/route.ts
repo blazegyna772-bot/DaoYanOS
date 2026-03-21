@@ -1,8 +1,15 @@
 import { NextRequest, NextResponse } from "next/server"
 import { readProject, writeProject } from "@/lib/storage"
-import { getDirectorById } from "@/lib/promptLoader"
+import { buildShotEditPrompt as buildShotEditPromptPair } from "@/lib/promptBuilder"
 import { safetyCheck, getRiskReport } from "@/lib/safetyFilter"
-import type { Project, Director, PlatformConfig, Shot } from "@/types"
+import {
+  buildStoryboardMarkdown,
+  enforceTargetOnlyChanges,
+  parseShotsFromResponse,
+  recalculateShotTimeRanges,
+  resolveShotEditContext,
+} from "@/lib/shotEdit"
+import type { PlatformConfig } from "@/types"
 
 /**
  * 获取全局平台配置（从 global_config.json）
@@ -37,7 +44,7 @@ async function getGlobalPlatformConfig(): Promise<PlatformConfig | null> {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { projectId, episodeId, shotIds, editNote, mode = "single" } = body
+    const { projectId, episodeId, shotIds, editNote } = body
 
     if (!projectId || !episodeId || !shotIds?.length || !editNote) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 })
@@ -65,9 +72,6 @@ export async function POST(request: NextRequest) {
         hint: "请在设置页配置 AI 平台 API Key"
       }, { status: 400 })
     }
-
-    // 获取导演
-    const director = getDirectorById(project.selectedDirector)
 
     // 找到目标分集和分镜
     const episodeIndex = project.episodes.findIndex((ep) => ep.id === episodeId)
@@ -98,20 +102,30 @@ export async function POST(request: NextRequest) {
       }, { status: 400 })
     }
 
-    // 构建修改请求的系统提示词（传入完整分镜列表）
-    const systemPrompt = buildShotEditPrompt(director, project, allShots, targetShotIds, editNote)
+    const { contextShots, sceneScoped, sceneId, relativeShotIndices } = resolveShotEditContext(allShots, targetShotIds)
+    if (contextShots.length === 0) {
+      return NextResponse.json({ error: "Target shots not found" }, { status: 404 })
+    }
+
+    // 构建修改请求的系统提示词（优先使用场次局部表格）
+    if (relativeShotIndices.length === 0) {
+      return NextResponse.json({ error: "Target shots not found" }, { status: 404 })
+    }
+
+    const currentStoryboardMarkdown = buildStoryboardMarkdown(contextShots, project.stcEnabled)
+    const { systemPrompt, userPrompt } = buildShotEditPromptPair(
+      relativeShotIndices.join("、"),
+      editNote,
+      currentStoryboardMarkdown,
+      project.assets,
+      sceneScoped ? "场次" : "完整"
+    )
 
     // 调用 AI API
-    const response = await callAI(platform, systemPrompt, editNote)
+    const response = await callAI(platform, systemPrompt, userPrompt)
 
-    console.log("[shots/edit] AI 原始响应:", response.slice(0, 500))
-
-    // 解析返回的分镜数据（从全部分镜中提取目标分镜）
-    const { shots: updatedShots, error: parseError, debug } = parseShotsFromResponse(response, allShots, targetShotIds)
-
-    console.log("[shots/edit] 解析后的分镜数量:", updatedShots.length)
-    console.log("[shots/edit] 解析后的分镜ID:", updatedShots.map(s => s.id))
-    console.log("[shots/edit] 调试信息:", JSON.stringify(debug, null, 2))
+    // 解析返回的分镜数据（优先在场次局部上下文内回写）
+    const { shots: updatedContextShots, error: parseError, debug } = parseShotsFromResponse(response, contextShots, targetShotIds)
 
     if (parseError) {
       return NextResponse.json({
@@ -121,20 +135,17 @@ export async function POST(request: NextRequest) {
       }, { status: 200 })
     }
 
+    const updatedShots = recalculateShotTimeRanges(enforceTargetOnlyChanges(allShots, allShots.map((shot) => {
+      const updated = updatedContextShots.find((candidate) => candidate.id === shot.id)
+      return updated || shot
+    }), targetShotIds))
+
     // 更新项目中的分镜
     const updatedEpisodes = [...project.episodes]
-    const updatedShotsList = [...(episode.shots || [])]
-
-    updatedShots.forEach((updatedShot) => {
-      const index = updatedShotsList.findIndex((s) => s.id === updatedShot.id)
-      if (index !== -1) {
-        updatedShotsList[index] = updatedShot
-      }
-    })
 
     updatedEpisodes[episodeIndex] = {
       ...episode,
-      shots: updatedShotsList,
+      shots: updatedShots,
     }
 
     // 保存项目
@@ -148,60 +159,21 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       shots: updatedShots,
-      message: `已成功修改 ${updatedShots.length} 个分镜`,
-      debug,  // 返回调试信息
+      message: sceneScoped
+        ? `已按场次 ${sceneId} 的局部分镜表回写，目标镜头 ${targetShotIds.length} 个`
+        : `已按完整分镜表回写，目标镜头 ${targetShotIds.length} 个`,
+      debug: {
+        ...((debug && typeof debug === "object") ? debug as Record<string, unknown> : {}),
+        sceneScoped,
+        sceneId,
+        contextShotCount: contextShots.length,
+        relativeShotIndices,
+      },
     })
   } catch (error) {
     console.error("Shot edit API error:", error)
     return NextResponse.json({ error: (error as Error).message }, { status: 500 })
   }
-}
-
-/**
- * 构建单镜修改提示词（简化版，传递完整分镜列表）
- */
-function buildShotEditPrompt(
-  director: Director | undefined,
-  project: Project,
-  allShots: Shot[],
-  targetShotIds: string[],
-  editNote: string
-): string {
-  // 找到要修改的分镜编号
-  const targetIndices = targetShotIds.map(id => {
-    const index = allShots.findIndex(s => s.id === id)
-    return index >= 0 ? index + 1 : -1
-  }).filter(i => i > 0)
-
-  const directorInfo = director
-    ? `导演：${director.name}，风格：${director.style}`
-    : ""
-
-  // 紧凑的分镜表格格式
-  const shotsTable = allShots.map((shot, index) => {
-    const isTarget = targetShotIds.includes(shot.id)
-    return `${index + 1} | ${shot.type || ""} | ${shot.duration || 3}s | ${shot.env || ""} | ${shot.action || ""} | ${shot.light || ""} | ${shot.seedancePrompt || ""}${isTarget ? " ← 要修改" : ""}`
-  }).join("\n")
-
-  // 简化的提示词
-  return `你是DaoYanOS分镜师，根据修改意见调整分镜。
-${directorInfo}
-视觉风格：${project.visualStyle}
-
-【分镜表格】（第${targetIndices.join("、")}镜需要修改）
-# | 景别 | 时长 | 环境 | 角色分动 | 光影 | SEEDANCE提示词
-${shotsTable}
-
-【修改要求】
-${editNote}
-
-【规则】
-1. 只修改第${targetIndices.join("、")}镜，其他保持不变
-2. 修改后同步更新SEEDANCE提示词
-3. 输出JSON数组格式
-
-【输出格式示例】
-[{"index":1,"type":"中景","duration":5,"env":"...","action":"...","light":"...","seedancePrompt":"..."}]`
 }
 
 /**
@@ -303,86 +275,4 @@ async function callAI(
     return data.output?.choices?.[0]?.message?.content || ""
   }
   return data.choices?.[0]?.message?.content || ""
-}
-
-/**
- * 解析AI返回的分镜数据
- * 从返回的分镜列表中提取目标分镜（根据 index 匹配）
- */
-function parseShotsFromResponse(
-  response: string,
-  originalShots: Shot[],
-  targetShotIds: string[]
-): { shots: Shot[], error?: string, debug?: unknown } {
-  try {
-    // 提取JSON（可能被markdown包裹）
-    let content = response.trim()
-    if (content.startsWith("```json")) {
-      content = content.slice(7)
-    }
-    if (content.startsWith("```")) {
-      content = content.slice(3)
-    }
-    if (content.endsWith("```")) {
-      content = content.slice(0, -3)
-    }
-
-    const parsed = JSON.parse(content.trim())
-
-    if (!Array.isArray(parsed)) {
-      return {
-        shots: originalShots.filter(s => targetShotIds.includes(s.id)),
-        error: "AI 返回的不是数组格式，请重试"
-      }
-    }
-
-    // 根据 index 匹配原始分镜，提取目标分镜
-    const updatedShots: Shot[] = []
-    const debugInfo: { targetId: string; originalIndex: number; found: boolean; returnedData?: unknown }[] = []
-
-    for (const targetId of targetShotIds) {
-      const originalIndex = originalShots.findIndex(s => s.id === targetId)
-      if (originalIndex === -1) continue
-
-      const original = originalShots[originalIndex]
-      // AI 返回的分镜是 1-indexed
-      const returnedShot = parsed.find((item: { index?: number }) => item.index === originalIndex + 1)
-
-      const debugItem = { targetId, originalIndex: originalIndex + 1, found: !!returnedShot, returnedData: returnedShot }
-      debugInfo.push(debugItem)
-
-      if (returnedShot) {
-        updatedShots.push({
-          id: original.id,  // 强制使用原始 ID
-          sceneId: original.sceneId,
-          index: original.index,
-          globalIndex: original.globalIndex,
-          type: returnedShot.type !== undefined ? returnedShot.type : original.type,
-          duration: returnedShot.duration !== undefined ? returnedShot.duration : original.duration,
-          timeRange: returnedShot.timeRange !== undefined ? returnedShot.timeRange : original.timeRange,
-          env: returnedShot.env !== undefined ? returnedShot.env : original.env,
-          action: returnedShot.action !== undefined ? returnedShot.action : original.action,
-          light: returnedShot.light !== undefined ? returnedShot.light : original.light,
-          tension: returnedShot.tension !== undefined ? returnedShot.tension : original.tension,
-          seedancePrompt: returnedShot.seedancePrompt !== undefined ? returnedShot.seedancePrompt : original.seedancePrompt,
-          camera: returnedShot.camera !== undefined ? returnedShot.camera : original.camera,
-          sound: returnedShot.sound !== undefined ? returnedShot.sound : original.sound,
-          dialogue: returnedShot.dialogue !== undefined ? returnedShot.dialogue : original.dialogue,
-        })
-      }
-    }
-
-    return { shots: updatedShots, debug: { parsed, debugInfo } }
-      }
-    }
-
-    return { shots: updatedShots }
-  } catch (error) {
-    console.error("Failed to parse shots from response:", error)
-    console.error("原始响应:", response.slice(0, 1000))
-    return {
-      shots: originalShots.filter(s => targetShotIds.includes(s.id)),
-      error: `解析 AI 响应失败: ${(error as Error).message}`
-    }
-  }
 }

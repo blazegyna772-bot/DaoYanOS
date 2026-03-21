@@ -3,6 +3,7 @@
 import { useState, useMemo, Suspense, useEffect, useRef } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import {
+  AlertCircle,
   ArrowLeft,
   Play,
   Save,
@@ -25,12 +26,15 @@ import {
   Copy,
   Layers,
   Sparkles,
+  Video,
+  Code,
 } from "lucide-react"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Badge } from "@/components/ui/badge"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Label } from "@/components/ui/label"
 import {
@@ -68,6 +72,85 @@ const toolTabs: { id: ToolTab; label: string; icon: React.ElementType }[] = [
   { id: "assets", label: "资产", icon: Package },
 ]
 
+type PageFeedback = {
+  type: "success" | "error" | "info"
+  text: string
+}
+
+const ZERO_TIME_RANGE_RE = /^0(?:\.0+)?\s*-\s*0(?:\.0+)?s?$/
+
+function parseDurationFromTimeRange(timeRange: string, fallback = 5) {
+  const rangeMatch = timeRange.match(/(\d+(?:\.\d+)?)\s*s?\s*-\s*(\d+(?:\.\d+)?)\s*s?/)
+  if (rangeMatch) {
+    const start = Number.parseFloat(rangeMatch[1])
+    const end = Number.parseFloat(rangeMatch[2])
+    if (end > start) return end - start
+  }
+
+  const singleMatch = timeRange.match(/(\d+(?:\.\d+)?)/)
+  if (singleMatch) {
+    const value = Number.parseFloat(singleMatch[1])
+    return value > 0 ? value : fallback
+  }
+
+  return fallback
+}
+
+function buildAssetTagToIdMap(project: Project | null) {
+  const map = new Map<string, string>()
+  if (!project) return map
+
+  project.assets.character.forEach((asset, index) => map.set(`@人物${index + 1}`, asset.id))
+  project.assets.image.forEach((asset, index) => map.set(`@图片${index + 1}`, asset.id))
+  project.assets.props.forEach((asset, index) => map.set(`@道具${index + 1}`, asset.id))
+
+  return map
+}
+
+function collectEpisodeReferencedAssetIds(project: Project | null, episode: Episode | undefined) {
+  const result = {
+    characterIds: [] as string[],
+    imageIds: [] as string[],
+    propIds: [] as string[],
+  }
+
+  if (!project || !episode) return result
+
+  const tagToId = buildAssetTagToIdMap(project)
+  const fallbackRefs = {
+    characterIds: new Set(episode.assetRefs?.characterIds || []),
+    imageIds: new Set(episode.assetRefs?.imageIds || []),
+    propIds: new Set(episode.assetRefs?.propIds || []),
+  }
+
+  if (
+    fallbackRefs.characterIds.size === 0 &&
+    fallbackRefs.imageIds.size === 0 &&
+    fallbackRefs.propIds.size === 0
+  ) {
+    episode.shots?.forEach((shot) => {
+      const tags = ((shot.seedancePrompt || shot.action || "").match(/@(?:人物|图片|道具)\d+/g) || []) as string[]
+      tags.forEach((tag) => {
+        const assetId = tagToId.get(tag)
+        if (!assetId) return
+        if (tag.startsWith("@人物")) fallbackRefs.characterIds.add(assetId)
+        if (tag.startsWith("@图片")) fallbackRefs.imageIds.add(assetId)
+        if (tag.startsWith("@道具")) fallbackRefs.propIds.add(assetId)
+      })
+    })
+  }
+
+  return {
+    characterIds: Array.from(fallbackRefs.characterIds),
+    imageIds: Array.from(fallbackRefs.imageIds),
+    propIds: Array.from(fallbackRefs.propIds),
+  }
+}
+
+function hasValidShotDuration(shot: Shot) {
+  return Number.isFinite(shot.duration) && shot.duration > 0
+}
+
 function ShotsPageInner() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -77,11 +160,13 @@ function ShotsPageInner() {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [isDevLogOpen, setIsDevLogOpen] = useState(false)
+  const [pageFeedback, setPageFeedback] = useState<PageFeedback | null>(null)
 
   // 生成状态
   const [generationState, setGenerationState] = useState<GenerationProgress>(generationStore.getState())
   const abortControllerRef = useRef<AbortController | null>(null)
   const hasStartedGenerationRef = useRef(false)
+  const latestProjectRef = useRef<Project | null>(null)
 
   // 从 API 加载项目
   useEffect(() => {
@@ -128,6 +213,125 @@ function ShotsPageInner() {
     }
   }, [isGeneratingFromUrl, project, episodeIdFromUrl])
 
+  const recalculateShotTimeRanges = (shots: Shot[]) => {
+    let offset = 0
+    return shots.map((shot) => {
+      const duration = hasValidShotDuration(shot) ? shot.duration : 5
+      const nextShot = {
+        ...shot,
+        duration,
+        timeRange: `${offset}-${offset + duration}s`,
+      }
+      offset += duration
+      return nextShot
+    })
+  }
+
+  const normalizeEpisodeShots = (episode: Episode) => {
+    const parsedShots = episode.generatedMarkdown ? parseShotsFromMarkdown(episode.generatedMarkdown) : []
+    let didChange = false
+
+    const normalizedShots = (episode.shots || []).map((shot, index) => {
+      const parsedShot = parsedShots[index]
+      const duration = hasValidShotDuration(shot)
+        ? shot.duration
+        : parsedShot?.duration || parseDurationFromTimeRange(shot.timeRange || "", 5)
+
+      const shouldRepairTimeRange = !shot.timeRange || ZERO_TIME_RANGE_RE.test(shot.timeRange.trim())
+      const timeRange = shouldRepairTimeRange
+        ? parsedShot?.timeRange || shot.timeRange || ""
+        : shot.timeRange
+
+      if (duration !== shot.duration || timeRange !== shot.timeRange) {
+        didChange = true
+      }
+
+      return {
+        ...shot,
+        duration,
+        timeRange,
+      }
+    })
+
+    const recalculatedShots = recalculateShotTimeRanges(normalizedShots)
+    if (!didChange) {
+      didChange = recalculatedShots.some((shot, index) =>
+        shot.duration !== episode.shots[index]?.duration || shot.timeRange !== episode.shots[index]?.timeRange
+      )
+    }
+
+    if (!didChange) return { episode, changed: false }
+    return { episode: { ...episode, shots: recalculatedShots }, changed: true }
+  }
+
+  const normalizeProjectEpisodes = (inputProject: Project) => {
+    let changed = false
+    const episodes = inputProject.episodes.map((episode) => {
+      const normalized = normalizeEpisodeShots(episode)
+      if (normalized.changed) changed = true
+      return normalized.episode
+    })
+
+    if (!changed) return { project: inputProject, changed: false }
+    return {
+      project: {
+        ...inputProject,
+        episodes,
+      },
+      changed: true,
+    }
+  }
+
+  const mergeUpdatedShots = (shots: Shot[], incomingShots: Shot[]) => {
+    const incomingMap = new Map(incomingShots.map((shot) => [shot.id, shot]))
+    return shots.map((shot) => incomingMap.get(shot.id) || shot)
+  }
+
+  const applyUpdatedShotsToEpisode = (episodes: Episode[], episodeId: string, incomingShots: Shot[]) => {
+    return episodes.map((episode) => {
+      if (episode.id !== episodeId) return episode
+      const mergedShots = mergeUpdatedShots(episode.shots || [], incomingShots)
+      return { ...episode, shots: recalculateShotTimeRanges(mergedShots) }
+    })
+  }
+
+  const resolveInsertedShotSceneId = (shots: Shot[], insertIndex: number) => {
+    const previousShot = shots[insertIndex - 1]
+    const nextShot = shots[insertIndex]
+    return previousShot?.sceneId || nextShot?.sceneId || "scene_001"
+  }
+
+  const persistProject = async (projectToSave: Project) => {
+    const response = await fetch(`/api/projects/${projectToSave.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: projectToSave }),
+    })
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}))
+      throw new Error(data.error || "项目保存失败")
+    }
+  }
+
+  useEffect(() => {
+    latestProjectRef.current = project
+  }, [project])
+
+  const showPageFeedback = (type: PageFeedback["type"], text: string) => {
+    setPageFeedback({ type, text })
+  }
+
+  useEffect(() => {
+    if (!pageFeedback) return
+
+    const timer = window.setTimeout(() => {
+      setPageFeedback(null)
+    }, 4500)
+
+    return () => window.clearTimeout(timer)
+  }, [pageFeedback])
+
   // 解析 Markdown 表格为镜头数组
   const parseShotsFromMarkdown = (markdown: string) => {
     if (!markdown || typeof markdown !== "string") return []
@@ -148,8 +352,8 @@ function ShotsPageInner() {
             index: shotIndex,
             globalIndex: shotIndex,
             type: cells[1]?.trim() || "中景",
-            duration: parseInt(cells[0]?.match(/\d+/)?.[0] || "5"),
-            timeRange: "", // 先留空，后面统一计算
+            duration: parseDurationFromTimeRange(cells[0]?.trim() || "", 5),
+            timeRange: cells[0]?.trim() || "",
             env: cells[3]?.trim() || "",
             action: cells[3]?.trim() || "",
             light: cells[4]?.trim() || "",
@@ -164,7 +368,9 @@ function ShotsPageInner() {
     // 统一根据 duration 计算 timeRange
     let offset = 0
     for (const shot of shots) {
-      shot.timeRange = `${offset}-${offset + shot.duration}s`
+      if (!shot.timeRange) {
+        shot.timeRange = `${offset}-${offset + shot.duration}s`
+      }
       offset += shot.duration
     }
 
@@ -258,25 +464,23 @@ function ShotsPageInner() {
                   const parsedShots = parseShotsFromMarkdown(eventData.content)
                   generationStore.completeGeneration(eventData.content, parsedShots)
 
-                  // 保存项目
-                  setProject((p) => {
-                    if (!p) return p
-                    return {
-                      ...p,
-                      episodes: p.episodes.map((ep) =>
-                        ep.id === episodeIdFromUrl
-                          ? { ...ep, shots: parsedShots, generatedMarkdown: eventData.content }
-                          : ep
-                      ),
-                    }
-                  })
+                  const projectToPersist = latestProjectRef.current
+                    ? {
+                        ...latestProjectRef.current,
+                        episodes: latestProjectRef.current.episodes.map((ep) =>
+                          ep.id === episodeIdFromUrl
+                            ? { ...ep, shots: parsedShots, generatedMarkdown: eventData.content }
+                            : ep
+                        ),
+                      }
+                    : null
 
-                  // 保存到服务器
-                  fetch(`/api/projects/${project.id}`, {
-                    method: "PUT",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ project: { ...project, episodes: project.episodes.map((ep) => ep.id === episodeIdFromUrl ? { ...ep, shots: parsedShots } : ep) } }),
-                  })
+                  if (projectToPersist) {
+                    setProject(projectToPersist)
+                    void persistProject(projectToPersist).catch((persistError) => {
+                      devLogger.error("分镜生成结果保存失败", persistError)
+                    })
+                  }
                   break
 
                 case "error":
@@ -314,7 +518,13 @@ function ShotsPageInner() {
       const response = await fetch(`/api/projects/${id}`)
       if (response.ok) {
         const data = await response.json()
-        setProject(data.project)
+        const normalized = normalizeProjectEpisodes(data.project)
+        setProject(normalized.project)
+        if (normalized.changed) {
+          void persistProject(normalized.project).catch((persistError) => {
+            devLogger.error("旧分镜时间轴归一化保存失败", persistError)
+          })
+        }
       } else {
         setError("加载项目失败")
       }
@@ -370,25 +580,38 @@ function ShotsPageInner() {
   const episodeAssets = useMemo(() => {
     if (!project?.assets) return []
 
+    const assetRefs = collectEpisodeReferencedAssetIds(project, activeEpisode)
+    const allowedIds = new Set([
+      ...assetRefs.characterIds,
+      ...assetRefs.imageIds,
+      ...assetRefs.propIds,
+    ])
+
     const assets: Asset[] = []
 
     // 添加角色资产
     project.assets.character?.forEach((asset) => {
-      assets.push({ ...asset, type: "character" as const })
+      if (allowedIds.has(asset.id)) {
+        assets.push({ ...asset, type: "character" as const })
+      }
     })
 
     // 添加场景资产
     project.assets.image?.forEach((asset) => {
-      assets.push({ ...asset, type: "image" as const })
+      if (allowedIds.has(asset.id)) {
+        assets.push({ ...asset, type: "image" as const })
+      }
     })
 
     // 添加道具资产
     project.assets.props?.forEach((asset) => {
-      assets.push({ ...asset, type: "props" as const })
+      if (allowedIds.has(asset.id)) {
+        assets.push({ ...asset, type: "props" as const })
+      }
     })
 
     return assets
-  }, [project?.assets])
+  }, [project, activeEpisode])
 
   // 过滤本集资产
   const filteredAssets = useMemo(() => {
@@ -452,7 +675,7 @@ function ShotsPageInner() {
     }
 
     if (targetShotIds.length === 0) {
-      alert("请选择要修改的分镜")
+      showPageFeedback("error", "请选择要修改的分镜")
       return
     }
 
@@ -474,37 +697,26 @@ function ShotsPageInner() {
 
       if (!response.ok) {
         if (result.safetyCheck) {
-          alert(`内容安全检测未通过:\n${result.safetyCheck.report}`)
+          showPageFeedback("error", `内容安全检测未通过:\n${result.safetyCheck.report}`)
         } else {
-          alert(`修改失败: ${result.error}`)
+          showPageFeedback("error", `修改失败: ${result.error}`)
         }
         return
       }
 
-      // 更新本地状态
-      setProject((p) => {
-        if (!p) return p
-        return {
-          ...p,
-          episodes: p.episodes.map((ep) =>
-            ep.id === activeEpisode.id
-              ? {
-                  ...ep,
-                  shots: ep.shots?.map((s) => {
-                    const updated = result.shots.find((us: Shot) => us.id === s.id)
-                    return updated || s
-                  }),
-                }
-              : ep
-          ),
-        }
-      })
+      const updatedProject = {
+        ...project,
+        episodes: applyUpdatedShotsToEpisode(project.episodes, activeEpisode.id, result.shots),
+      }
+
+      setProject(updatedProject)
+      await persistProject(updatedProject)
 
       // 清空修改意见
       setEditNote("")
-      alert(result.message)
+      showPageFeedback("success", result.message)
     } catch (error) {
-      alert(`修改失败: ${(error as Error).message}`)
+      showPageFeedback("error", `修改失败: ${(error as Error).message}`)
     } finally {
       setIsApplyingEdit(false)
     }
@@ -534,32 +746,21 @@ function ShotsPageInner() {
       const result = await response.json()
 
       if (!response.ok) {
-        alert(`重新生成失败: ${result.error}`)
+        showPageFeedback("error", `重新生成失败: ${result.error}`)
         return
       }
 
-      // 更新本地状态
-      setProject((p) => {
-        if (!p) return p
-        return {
-          ...p,
-          episodes: p.episodes.map((ep) =>
-            ep.id === activeEpisode.id
-              ? {
-                  ...ep,
-                  shots: ep.shots?.map((s) => {
-                    const updated = result.shots.find((us: Shot) => us.id === s.id)
-                    return updated || s
-                  }),
-                }
-              : ep
-          ),
-        }
-      })
+      const updatedProject = {
+        ...project,
+        episodes: applyUpdatedShotsToEpisode(project.episodes, activeEpisode.id, result.shots),
+      }
 
-      alert(result.message)
+      setProject(updatedProject)
+      await persistProject(updatedProject)
+
+      showPageFeedback("success", result.message)
     } catch (error) {
-      alert(`重新生成失败: ${(error as Error).message}`)
+      showPageFeedback("error", `重新生成失败: ${(error as Error).message}`)
     } finally {
       setIsRegenerating(false)
     }
@@ -576,7 +777,7 @@ function ShotsPageInner() {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
-        alert(`导出失败: ${errorData.error || response.statusText}`)
+        showPageFeedback("error", `导出失败: ${errorData.error || response.statusText}`)
         return
       }
 
@@ -596,15 +797,16 @@ function ShotsPageInner() {
       a.click()
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
+      showPageFeedback("success", `已开始下载 ${filename}`)
     } catch (error) {
-      alert(`导出失败: ${(error as Error).message}`)
+      showPageFeedback("error", `导出失败: ${(error as Error).message}`)
     }
   }
 
   // 复制全部提示词
   const handleCopyAllPrompts = () => {
     if (!activeEpisode?.shots?.length) {
-      alert("当前分集没有分镜")
+      showPageFeedback("error", "当前分集没有分镜")
       return
     }
 
@@ -613,16 +815,16 @@ function ShotsPageInner() {
       .join("\n\n")
 
     navigator.clipboard.writeText(prompts).then(() => {
-      alert("已复制全部提示词到剪贴板")
+      showPageFeedback("success", "已复制全部提示词到剪贴板")
     }).catch(() => {
-      alert("复制失败")
+      showPageFeedback("error", "复制失败")
     })
   }
 
   // 整合提示词
   const handleMergePrompts = () => {
     if (!activeEpisode?.shots?.length) {
-      alert("当前分集没有分镜")
+      showPageFeedback("error", "当前分集没有分镜")
       return
     }
 
@@ -632,9 +834,9 @@ function ShotsPageInner() {
       .join(" ")
 
     navigator.clipboard.writeText(merged).then(() => {
-      alert("已整合提示词并复制到剪贴板")
+      showPageFeedback("success", "已整合提示词并复制到剪贴板")
     }).catch(() => {
-      alert("复制失败")
+      showPageFeedback("error", "复制失败")
     })
   }
 
@@ -656,7 +858,7 @@ function ShotsPageInner() {
   const handleStartGeneration = async () => {
     if (!project || !activeEpisodeId) return
     if (!activeEpisode?.plotInput?.trim()) {
-      alert("当前分集没有剧本内容，请先在剧本页输入剧本")
+      showPageFeedback("error", "当前分集没有剧本内容，请先在剧本页输入剧本")
       return
     }
 
@@ -701,18 +903,12 @@ function ShotsPageInner() {
       const result = await response.json()
       devLogger.api("响应", result)
 
-      console.log("[单镜修改] API 响应:", result)
-      console.log("[单镜修改] response.ok:", response.ok)
-      console.log("[单镜修改] result.success:", result.success)
-      console.log("[单镜修改] result.shots:", result.shots)
-      console.log("[单镜修改] result.error:", result.error)
-
       if (!response.ok) {
         devLogger.error("修改失败", result)
         if (result.safetyCheck) {
-          alert(`内容安全检测未通过:\n${result.safetyCheck.report}`)
+          showPageFeedback("error", `内容安全检测未通过:\n${result.safetyCheck.report}`)
         } else {
-          alert(`修改失败: ${result.error}`)
+          showPageFeedback("error", `修改失败: ${result.error}`)
         }
         return
       }
@@ -720,27 +916,19 @@ function ShotsPageInner() {
       // 检查是否有解析错误
       if (result.error) {
         devLogger.error("解析错误", result)
-        alert(`修改失败: ${result.error}\n\nAI 原始响应:\n${result.rawResponse || "无"}`)
+        showPageFeedback("error", `修改失败: ${result.error}\n\nAI 原始响应:\n${result.rawResponse || "无"}`)
         return
       }
 
       // 检查是否有返回的分镜数据
       if (!result.shots || result.shots.length === 0) {
         devLogger.error("AI 未返回有效数据", result)
-        alert("修改失败: AI 未返回有效的分镜数据")
+        showPageFeedback("error", "修改失败: AI 未返回有效的分镜数据")
         return
       }
 
-      // 打印详细调试信息
-      console.log("[单镜修改] API 返回的完整结果:", result)
-      console.log("[单镜修改] 调试信息:", result.debug)
-      console.log("[单镜修改] 返回的分镜数据:", result.shots)
-      console.log("[单镜修改] 准备更新分镜, 原始ID:", singleEditShotId)
-
-      // 打印每个分镜的 duration 变化
       result.shots.forEach((s: Shot) => {
         const original = activeEpisode?.shots?.find(os => os.id === s.id)
-        console.log(`[单镜修改] 分镜 ${s.id} duration: ${original?.duration} -> ${s.duration}`)
         devLogger.info(`分镜 ${s.id} 更新`, {
           duration: `${original?.duration}s -> ${s.duration}s`,
           type: `${original?.type} -> ${s.type}`,
@@ -748,54 +936,23 @@ function ShotsPageInner() {
         })
       })
 
-      // 更新本地状态，并重新计算 timeRange
-      setProject((p) => {
-        if (!p) return p
-        const updatedEpisodes = p.episodes.map((ep) => {
-          if (ep.id !== activeEpisode.id) return ep
+      const updatedEpisodes = applyUpdatedShotsToEpisode(project.episodes, activeEpisode.id, result.shots)
+      const updatedProject = { ...project, episodes: updatedEpisodes }
 
-          // 更新分镜
-          const updatedShots = ep.shots?.map((s) => {
-            const updated = result.shots.find((us: Shot) => us.id === s.id)
-            console.log(`[单镜修改] 分镜 ${s.id}: 更新=${!!updated}`)
-            return updated || s
-          })
-
-          // 重新计算所有分镜的 timeRange
-          let offset = 0
-          const recalculatedShots = updatedShots?.map((s) => {
-            const newTimeRange = `${offset}-${offset + s.duration}s`
-            offset += s.duration
-            return { ...s, timeRange: newTimeRange }
-          })
-
-          return { ...ep, shots: recalculatedShots }
-        })
-        console.log("[单镜修改] 状态更新完成，已重新计算 timeRange")
-        return { ...p, episodes: updatedEpisodes }
-      })
+      setProject(updatedProject)
 
       devLogger.success("✅ 单镜修改完成", { shotCount: result.shots.length })
 
-      // 保存到服务器
-      setProject((p) => {
-        if (!p) return p
-        fetch(`/api/projects/${p.id}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(p),
-        })
-        return p
-      })
+      await persistProject(updatedProject)
 
       // 关闭对话框
       setIsSingleEditOpen(false)
       setSingleEditShotId(null)
       setSingleEditNote("")
-      console.log("[单镜修改] 完成")
+      showPageFeedback("success", "单镜修改已完成并保存")
     } catch (error) {
       devLogger.error("修改异常", error)
-      alert(`修改失败: ${(error as Error).message}`)
+      showPageFeedback("error", `修改失败: ${(error as Error).message}`)
     } finally {
       setIsSingleEditLoading(false)
     }
@@ -816,7 +973,7 @@ function ShotsPageInner() {
     // 创建新分镜
     const newShot: Shot = {
       id: newShotId,
-      sceneId: `S${Math.ceil((insertIndex + 1) / 5)}`,
+      sceneId: resolveInsertedShotSceneId(currentShots, insertIndex),
       index: insertIndex + 1,
       globalIndex: insertIndex + 1,
       type: "中景",
@@ -835,11 +992,11 @@ function ShotsPageInner() {
     newShots.splice(insertIndex, 0, newShot)
 
     // 动态重排序号
-    const reindexedShots = newShots.map((shot, idx) => ({
+    const reindexedShots = recalculateShotTimeRanges(newShots.map((shot, idx) => ({
       ...shot,
       index: idx + 1,
       globalIndex: idx + 1,
-    }))
+    })))
 
     const newProject = {
       ...project,
@@ -853,13 +1010,9 @@ function ShotsPageInner() {
 
     // 保存到服务器
     try {
-      await fetch(`/api/projects/${project.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ project: newProject }),
-      })
+      await persistProject(newProject)
     } catch (error) {
-      console.error("保存失败:", error)
+      showPageFeedback("error", `新增分镜后保存失败: ${(error as Error).message}`)
     }
   }
 
@@ -872,11 +1025,11 @@ function ShotsPageInner() {
     const filteredShots = currentShots.filter((s) => s.id !== shotId)
 
     // 动态重排序号
-    const reindexedShots = filteredShots.map((shot, idx) => ({
+    const reindexedShots = recalculateShotTimeRanges(filteredShots.map((shot, idx) => ({
       ...shot,
       index: idx + 1,
       globalIndex: idx + 1,
-    }))
+    })))
 
     const newProject = {
       ...project,
@@ -899,13 +1052,9 @@ function ShotsPageInner() {
 
     // 保存到服务器
     try {
-      await fetch(`/api/projects/${project.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ project: newProject }),
-      })
+      await persistProject(newProject)
     } catch (error) {
-      console.error("保存失败:", error)
+      showPageFeedback("error", `删除分镜后保存失败: ${(error as Error).message}`)
     }
   }
 
@@ -918,11 +1067,11 @@ function ShotsPageInner() {
     const filteredShots = currentShots.filter((s) => !selectedShotIds.has(s.id))
 
     // 动态重排序号
-    const reindexedShots = filteredShots.map((shot, idx) => ({
+    const reindexedShots = recalculateShotTimeRanges(filteredShots.map((shot, idx) => ({
       ...shot,
       index: idx + 1,
       globalIndex: idx + 1,
-    }))
+    })))
 
     const newProject = {
       ...project,
@@ -937,13 +1086,9 @@ function ShotsPageInner() {
 
     // 保存到服务器
     try {
-      await fetch(`/api/projects/${project.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ project: newProject }),
-      })
+      await persistProject(newProject)
     } catch (error) {
-      console.error("保存失败:", error)
+      showPageFeedback("error", `批量删除后保存失败: ${(error as Error).message}`)
     }
   }
 
@@ -966,13 +1111,7 @@ function ShotsPageInner() {
 
         // 如果更新了 duration，重新计算所有分镜的 timeRange
         if (field === "duration" && updatedShots) {
-          let offset = 0
-          const recalculatedShots = updatedShots.map((s) => {
-            const newTimeRange = `${offset}-${offset + s.duration}s`
-            offset += s.duration
-            return { ...s, timeRange: newTimeRange }
-          })
-          return { ...ep, shots: recalculatedShots }
+          return { ...ep, shots: recalculateShotTimeRanges(updatedShots) }
         }
 
         return { ...ep, shots: updatedShots }
@@ -1052,6 +1191,15 @@ function ShotsPageInner() {
               <Film className="w-3.5 h-3.5" />
               分镜
             </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1.5 text-xs"
+              onClick={() => router.push(`/editor/prompts?id=${project.id}&episodeId=${activeEpisodeId}`)}
+            >
+              <Code className="w-3.5 h-3.5" />
+              提示词
+            </Button>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -1081,8 +1229,8 @@ function ShotsPageInner() {
               </>
             ) : (
               <>
-                <Play className="w-3.5 h-3.5" />
-                生成
+                <Video className="w-3.5 h-3.5" />
+                生成分镜
               </>
             )}
           </Button>
@@ -1092,6 +1240,29 @@ function ShotsPageInner() {
           </Button>
         </div>
       </header>
+
+      {pageFeedback && (
+        <div className="px-4 pt-3">
+          <Alert
+            className={
+              pageFeedback.type === "error"
+                ? "border-destructive/30 bg-destructive/5 text-destructive"
+                : pageFeedback.type === "success"
+                  ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300"
+                  : "border-amber-500/30 bg-amber-500/5 text-amber-700 dark:text-amber-300"
+            }
+          >
+            {pageFeedback.type === "error" ? (
+              <AlertCircle className="h-4 w-4" />
+            ) : (
+              <Check className="h-4 w-4" />
+            )}
+            <AlertDescription className="whitespace-pre-wrap text-xs">
+              {pageFeedback.text}
+            </AlertDescription>
+          </Alert>
+        </div>
+      )}
 
       <div className="flex-1 flex overflow-hidden">
         {/* ===== 左侧栏 - 分集列表 ===== */}

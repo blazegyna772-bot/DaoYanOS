@@ -1,6 +1,30 @@
 import { NextRequest, NextResponse } from "next/server"
 import type { PlatformConfig } from "@/types"
 
+type ExtractedCharacter = {
+  name: string
+  desc: string
+  importance: "lead" | "supporting" | "minor"
+}
+
+type ExtractedScene = {
+  name: string
+  desc: string
+  type: "interior" | "exterior" | "mixed"
+}
+
+type ExtractedProp = {
+  name: string
+  desc: string
+  category: "key" | "background" | "action"
+}
+
+type ExtractedAssets = {
+  characters: ExtractedCharacter[]
+  scenes: ExtractedScene[]
+  props: ExtractedProp[]
+}
+
 /**
  * 获取全局平台配置
  */
@@ -169,6 +193,224 @@ const ASSET_EXTRACTION_PROMPT = `你是一位顶级影视统筹师，拥有20年
   "category": "key" | "background" | "action"
 }`
 
+const FALLBACK_PROP_KEYWORDS = [
+  "枪",
+  "手枪",
+  "银针",
+  "解药",
+  "药箱",
+  "匕首",
+  "长刀",
+  "钥匙",
+  "火把",
+  "手电",
+  "信物",
+  "玉佩",
+  "黑衣",
+  "绳索",
+  "面具",
+] as const
+
+function cleanResponseContent(content: string): string {
+  let cleanContent = content.trim()
+  if (cleanContent.startsWith("```json")) {
+    cleanContent = cleanContent.slice(7)
+  }
+  if (cleanContent.startsWith("```")) {
+    cleanContent = cleanContent.slice(3)
+  }
+  if (cleanContent.endsWith("```")) {
+    cleanContent = cleanContent.slice(0, -3)
+  }
+  return cleanContent.trim()
+}
+
+function normalizeExtractedAssets(raw: unknown): ExtractedAssets {
+  const payload = (raw || {}) as {
+    characters?: Array<Partial<ExtractedCharacter>>
+    scenes?: Array<Partial<ExtractedScene>>
+    props?: Array<Partial<ExtractedProp>>
+  }
+
+  return {
+    characters: (payload.characters || [])
+      .filter((item) => item?.name)
+      .slice(0, 10)
+      .map((item, index) => ({
+        name: String(item.name).trim(),
+        desc: String(item.desc || "").trim(),
+        importance: item.importance === "lead" || item.importance === "supporting" || item.importance === "minor"
+          ? item.importance
+          : index === 0 ? "lead" : index < 3 ? "supporting" : "minor",
+      })),
+    scenes: (payload.scenes || [])
+      .filter((item) => item?.name)
+      .slice(0, 10)
+      .map((item) => ({
+        name: String(item.name).trim(),
+        desc: String(item.desc || "").trim(),
+        type: item.type === "interior" || item.type === "exterior" || item.type === "mixed"
+          ? item.type
+          : "mixed",
+      })),
+    props: (payload.props || [])
+      .filter((item) => item?.name)
+      .slice(0, 10)
+      .map((item) => ({
+        name: String(item.name).trim(),
+        desc: String(item.desc || "").trim(),
+        category: item.category === "key" || item.category === "background" || item.category === "action"
+          ? item.category
+          : "key",
+      })),
+  }
+}
+
+function parseExtractionJson(content: string): ExtractedAssets {
+  return normalizeExtractedAssets(JSON.parse(cleanResponseContent(content)))
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function requestAssetExtraction(
+  url: string,
+  headers: Record<string, string>,
+  requestBody: object,
+  mode: string
+): Promise<ExtractedAssets> {
+  let lastError: string | null = null
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 45000)
+
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(requestBody),
+        signal: controller.signal,
+      })
+
+      if (!response.ok) {
+        const text = await response.text()
+        lastError = `API Error ${response.status}: ${text.slice(0, 200)}`
+        if (response.status < 500 && response.status !== 429) {
+          break
+        }
+      } else {
+        const data = await response.json()
+        const content = parseAPIResponse(data, mode)
+        return parseExtractionJson(content)
+      }
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : "Unknown fetch error"
+    } finally {
+      clearTimeout(timeout)
+    }
+
+    if (attempt < 3) {
+      await sleep(800 * attempt)
+    }
+  }
+
+  throw new Error(lastError || "资产提取请求失败")
+}
+
+function normalizePlot(plot: string): string {
+  return plot.replace(/\r/g, "").trim()
+}
+
+function dedupeNames(names: string[]): string[] {
+  const uniqueNames: string[] = []
+  const seen = new Set<string>()
+
+  for (const name of names) {
+    const normalized = name.trim()
+    if (!normalized || seen.has(normalized)) continue
+    seen.add(normalized)
+    uniqueNames.push(normalized)
+  }
+
+  return uniqueNames
+}
+
+function buildCharacterDesc(name: string): string {
+  return `${name}是剧本中的核心可视角色，需保持统一年龄层、服装轮廓与情绪气质设定，镜头内强调身份辨识度、动作特征与人物压迫感或情绪状态。`
+}
+
+function buildSceneDesc(name: string, timeHint: string, locationHint: string): string {
+  const timeText = timeHint || "未明确时段"
+  const locationText = locationHint || "空间关系待统一"
+  return `${name}是剧情推进场景，空间属性偏${locationText}，时间氛围为${timeText}，画面需统一主色调、光照方向和环境层次，保证跨镜头连续性。`
+}
+
+function buildPropDesc(name: string): string {
+  return `${name}是剧情里的关键可视道具，需明确材质、颜色、尺寸与使用痕迹，在角色持握和镜头切换时保持同一外观设定与功能指向。`
+}
+
+function inferSceneType(locationHint: string): "interior" | "exterior" | "mixed" {
+  if (locationHint.includes("外")) return "exterior"
+  if (locationHint.includes("内")) return "interior"
+  return "mixed"
+}
+
+function extractAssetsFallback(plot: string): ExtractedAssets {
+  const normalizedPlot = normalizePlot(plot)
+  const lines = normalizedPlot.split("\n").map((line) => line.trim()).filter(Boolean)
+
+  const characterNames = dedupeNames([
+    ...lines
+      .filter((line) => line.startsWith("【人物："))
+      .flatMap((line) =>
+        line
+          .replace(/^【人物：/, "")
+          .replace(/】$/, "")
+          .split(/[、，,\s/]+/)
+      ),
+    ...lines
+      .map((line) => line.match(/^([A-Za-z\u4E00-\u9FFF][A-Za-z0-9\u4E00-\u9FFF·]{0,15})[：:]/)?.[1] || "")
+      .filter(Boolean),
+  ]).slice(0, 10)
+
+  const sceneEntries = dedupeNames(
+    lines
+      .map((line) => {
+        const match = line.match(/^\d+-\d+\s+([^，,]+)(?:[，,]([^，,]+))?(?:[，,]([^，,]+))?/)
+        if (!match) return ""
+        return `${match[1]}|${match[2] || ""}|${match[3] || ""}`
+      })
+      .filter(Boolean)
+  )
+
+  const propNames = dedupeNames(
+    FALLBACK_PROP_KEYWORDS.filter((keyword) => normalizedPlot.includes(keyword))
+  ).slice(0, 10)
+
+  return {
+    characters: characterNames.map((name, index) => ({
+      name,
+      desc: buildCharacterDesc(name),
+      importance: index === 0 ? "lead" : index < 3 ? "supporting" : "minor",
+    })),
+    scenes: sceneEntries.map((entry) => {
+      const [name, locationHint, timeHint] = entry.split("|")
+      return {
+        name,
+        desc: buildSceneDesc(name, timeHint || "", locationHint || ""),
+        type: inferSceneType(locationHint || ""),
+      }
+    }),
+    props: propNames.map((name, index) => ({
+      name,
+      desc: buildPropDesc(name),
+      category: index < 3 ? "key" : "background",
+    })),
+  }
+}
+
 /**
  * POST /api/assets/extract
  * 从剧本中提取资产
@@ -206,57 +448,31 @@ export async function POST(request: NextRequest) {
       messages,
     })
 
-    // 调用 AI API
-    const response = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(requestBody),
-    })
-
-    if (!response.ok) {
-      const text = await response.text()
-      return NextResponse.json({
-        error: `API Error ${response.status}`,
-        details: text.slice(0, 200)
-      }, { status: 500 })
-    }
-
-    const data = await response.json()
-    const content = parseAPIResponse(data, platform.mode)
-
-    // 解析 JSON 响应
-    let extractedAssets
     try {
-      // 清理可能的 markdown 包裹
-      let cleanContent = content.trim()
-      if (cleanContent.startsWith("```json")) {
-        cleanContent = cleanContent.slice(7)
-      }
-      if (cleanContent.startsWith("```")) {
-        cleanContent = cleanContent.slice(3)
-      }
-      if (cleanContent.endsWith("```")) {
-        cleanContent = cleanContent.slice(0, -3)
-      }
-
-      extractedAssets = JSON.parse(cleanContent.trim())
-    } catch {
-      // 如果解析失败，返回原始内容让前端处理
+      const extractedAssets = await requestAssetExtraction(url, headers, requestBody, platform.mode)
       return NextResponse.json({
-        rawContent: content,
-        error: "Failed to parse AI response as JSON"
-      }, { status: 200 })
-    }
+        success: true,
+        source: "ai",
+        assets: extractedAssets,
+      })
+    } catch (error) {
+      const fallbackAssets = extractAssetsFallback(plot)
 
-    return NextResponse.json({
-      success: true,
-      assets: {
-        characters: extractedAssets.characters || [],
-        scenes: extractedAssets.scenes || [],
-        props: extractedAssets.props || [],
+      if (
+        fallbackAssets.characters.length === 0 &&
+        fallbackAssets.scenes.length === 0 &&
+        fallbackAssets.props.length === 0
+      ) {
+        throw error
       }
-    })
 
+      return NextResponse.json({
+        success: true,
+        source: "fallback",
+        warning: error instanceof Error ? error.message : "AI extraction failed",
+        assets: fallbackAssets,
+      })
+    }
   } catch (error) {
     console.error("Asset extraction error:", error)
     return NextResponse.json({

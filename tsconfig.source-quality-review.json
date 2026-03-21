@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2019",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "rootDir": ".",
+    "outDir": ".tmp/source-quality-review",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "noEmit": false
+  },
+  "include": [
+    "scripts/source-quality-review.ts",
+    "src/types/index.ts"
+  ]
+}

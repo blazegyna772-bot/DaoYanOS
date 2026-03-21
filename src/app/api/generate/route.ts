@@ -8,7 +8,11 @@ import {
   cancelGeneration,
   type ChainEngineCallbacks,
 } from "@/lib/chainEngine"
-import { buildFullSystemPrompt, type PromptBuilderOptions } from "@/lib/promptBuilder"
+import {
+  buildEffectivePlotForGenerate,
+  buildFullSystemPrompt,
+  type PromptBuilderOptions,
+} from "@/lib/promptBuilder"
 import type { Project, Director, PlatformConfig } from "@/types"
 
 // 服务端日志函数
@@ -171,6 +175,12 @@ export async function POST(request: NextRequest) {
 
     // 使用清洗后的剧本（如果启用了过滤）
     const cleanPlot = project.enableWordFilter ? safetyResult.text : plot
+    const effectivePlotForGenerate = buildEffectivePlotForGenerate(
+      cleanPlot,
+      project.scriptFaithfulMode,
+      project.isScriptImported,
+      project.assets
+    )
 
     // 创建引擎
     const engine = createChainEngine()
@@ -196,6 +206,18 @@ export async function POST(request: NextRequest) {
         })
 
         const callbacks: ChainEngineCallbacks = {
+          onStageAComplete: (scenes) => {
+            sendEvent("stage_a_complete", {
+              scenes: scenes.map((scene) => ({
+                id: scene.id,
+                name: scene.name,
+                beatType: scene.beatType,
+                beatTask: scene.beatTask,
+                duration: scene.duration,
+                contentSummary: scene.contentSummary,
+              })),
+            })
+          },
           onSceneStart: (scene, index) => {
             sendEvent("scene_start", {
               sceneId: scene.id,
@@ -226,7 +248,7 @@ export async function POST(request: NextRequest) {
 
         try {
           const { output } = await runChainGeneration(
-            cleanPlot,
+            effectivePlotForGenerate,
             project.duration,
             options,
             getDirectors(),

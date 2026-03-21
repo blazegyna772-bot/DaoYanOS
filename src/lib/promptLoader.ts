@@ -111,6 +111,59 @@ export interface PromptConfig {
   faithfulSuffix: string
   faithfulSystemPrompt: string
   assetTagInstruction: string
+  nameMappingFormat: string
+  propConsistencyRule: string
+  systemPrompts: {
+    fullSystemPrompt: string
+    burstSystemPrompt: string
+    directorStyleStandard: string
+    directorStyleAnime: string
+    assetLibraryHeader: string
+    assetLibraryCharacterSection: string
+    assetLibraryCharacterLine: string
+    assetLibraryImageSection: string
+    assetLibraryImageLine: string
+    assetLibraryPropSection: string
+    assetLibraryPropLine: string
+    assetCallRuleHeader: string
+    assetCallRuleCharacter: string
+    assetCallRuleImage: string
+    assetCallRuleProp: string
+    assetCallRuleFooter: string
+    faithfulHeaderMappingBlock: string
+    faithfulHeaderMappingLine: string
+    faithfulSuffixTagPriority: string
+    faithfulSuffixTextOnly: string
+    fiveDimensionRuleLine: string
+    fiveDimensionRuleBlock: string
+    seedanceDisabledInstructions: string
+    narrativeScaleBurst: string
+    narrativeScaleDirectVisualization: string
+    narrativeScaleAtmosphere: string
+    narrativeScaleMini: string
+    fullShotCountLock: string
+    bridgeExtractionPrompt: string
+    stageAPrompt: string
+    stageBSystemPrompt: string
+    stageBUserPrompt: string
+    stageBBeatTaskExplicit: string
+    stageBBeatTaskSummary: string
+    stageBBeatTaskGeneric: string
+    stageBAssetConsistencyTagged: string
+    stageBAssetConsistencyPlain: string
+    stageBDialogueLockBlock: string
+    stageBDialogueLockLine: string
+    stageBDialogueLockEmpty: string
+    stageBBridgePrompt: string
+    stageBShotCountAbsolute: string
+    stageBShotCountPerScene: string
+    stageBShotCountRange: string
+    stageBDirectVisualization: string
+    stageBAtmosphereNarrative: string
+    stageBMiniNarrative: string
+    stageBTensionFormatAtmosphere: string
+    stageBTensionFormatStandard: string
+  }
 }
 
 // ============================================
@@ -120,6 +173,7 @@ export interface PromptConfig {
 let configCache: PromptConfig | null = null
 let lastLoadTime = 0
 const CACHE_TTL = 60000 // 1 分钟缓存（生产环境可设为 Infinity）
+const isPromptLoaderVerbose = process.env.DAOYAN_VERBOSE_PROMPT_LOADER === "1"
 
 // ============================================
 // YAML 文件加载
@@ -145,7 +199,9 @@ export function loadPromptConfig(): PromptConfig {
     return configCache
   }
 
-  console.log("[PromptLoader] Loading prompt configuration from YAML files...")
+  if (isPromptLoaderVerbose) {
+    console.log("[PromptLoader] Loading prompt configuration from YAML files...")
+  }
 
   // 加载各个 YAML 文件
   const directorsYaml = loadYamlFile("directors.yaml")
@@ -155,6 +211,7 @@ export function loadPromptConfig(): PromptConfig {
   const faithfulModeYaml = loadYamlFile("faithfulMode.yaml")
   const visualStylesYaml = loadYamlFile("visualStyles.yaml")
   const shotEditYaml = loadYamlFile("shotEdit.yaml")
+  const systemPromptsYaml = loadYamlFile("systemPrompts.yaml")
 
   // 构建导演数据
   const directors: Record<string, Director> = {}
@@ -305,6 +362,60 @@ export function loadPromptConfig(): PromptConfig {
   const faithfulSuffix = faithfulModeYaml.faithfulSuffix as string || ""
   const faithfulSystemPrompt = faithfulModeYaml.faithfulSystemPrompt as string || ""
   const assetTagInstruction = faithfulModeYaml.assetTagInstruction as string || ""
+  const nameMappingFormat = faithfulModeYaml.nameMappingFormat as string || ""
+  const propConsistencyRule = faithfulModeYaml.propConsistencyRule as string || ""
+
+  const systemPrompts = {
+    fullSystemPrompt: systemPromptsYaml.fullSystemPrompt as string || "",
+    burstSystemPrompt: systemPromptsYaml.burstSystemPrompt as string || "",
+    directorStyleStandard: systemPromptsYaml.directorStyleStandard as string || "",
+    directorStyleAnime: systemPromptsYaml.directorStyleAnime as string || "",
+    assetLibraryHeader: systemPromptsYaml.assetLibraryHeader as string || "",
+    assetLibraryCharacterSection: systemPromptsYaml.assetLibraryCharacterSection as string || "",
+    assetLibraryCharacterLine: systemPromptsYaml.assetLibraryCharacterLine as string || "",
+    assetLibraryImageSection: systemPromptsYaml.assetLibraryImageSection as string || "",
+    assetLibraryImageLine: systemPromptsYaml.assetLibraryImageLine as string || "",
+    assetLibraryPropSection: systemPromptsYaml.assetLibraryPropSection as string || "",
+    assetLibraryPropLine: systemPromptsYaml.assetLibraryPropLine as string || "",
+    assetCallRuleHeader: systemPromptsYaml.assetCallRuleHeader as string || "",
+    assetCallRuleCharacter: systemPromptsYaml.assetCallRuleCharacter as string || "",
+    assetCallRuleImage: systemPromptsYaml.assetCallRuleImage as string || "",
+    assetCallRuleProp: systemPromptsYaml.assetCallRuleProp as string || "",
+    assetCallRuleFooter: systemPromptsYaml.assetCallRuleFooter as string || "",
+    faithfulHeaderMappingBlock: systemPromptsYaml.faithfulHeaderMappingBlock as string || "",
+    faithfulHeaderMappingLine: systemPromptsYaml.faithfulHeaderMappingLine as string || "",
+    faithfulSuffixTagPriority: systemPromptsYaml.faithfulSuffixTagPriority as string || "",
+    faithfulSuffixTextOnly: systemPromptsYaml.faithfulSuffixTextOnly as string || "",
+    fiveDimensionRuleLine: systemPromptsYaml.fiveDimensionRuleLine as string || "",
+    fiveDimensionRuleBlock: systemPromptsYaml.fiveDimensionRuleBlock as string || "",
+    seedanceDisabledInstructions: systemPromptsYaml.seedanceDisabledInstructions as string || "",
+    narrativeScaleBurst: systemPromptsYaml.narrativeScaleBurst as string || "",
+    narrativeScaleDirectVisualization: systemPromptsYaml.narrativeScaleDirectVisualization as string || "",
+    narrativeScaleAtmosphere: systemPromptsYaml.narrativeScaleAtmosphere as string || "",
+    narrativeScaleMini: systemPromptsYaml.narrativeScaleMini as string || "",
+    fullShotCountLock: systemPromptsYaml.fullShotCountLock as string || "",
+    bridgeExtractionPrompt: systemPromptsYaml.bridgeExtractionPrompt as string || "",
+    stageAPrompt: systemPromptsYaml.stageAPrompt as string || "",
+    stageBSystemPrompt: systemPromptsYaml.stageBSystemPrompt as string || "",
+    stageBUserPrompt: systemPromptsYaml.stageBUserPrompt as string || "",
+    stageBBeatTaskExplicit: systemPromptsYaml.stageBBeatTaskExplicit as string || "",
+    stageBBeatTaskSummary: systemPromptsYaml.stageBBeatTaskSummary as string || "",
+    stageBBeatTaskGeneric: systemPromptsYaml.stageBBeatTaskGeneric as string || "",
+    stageBAssetConsistencyTagged: systemPromptsYaml.stageBAssetConsistencyTagged as string || "",
+    stageBAssetConsistencyPlain: systemPromptsYaml.stageBAssetConsistencyPlain as string || "",
+    stageBDialogueLockBlock: systemPromptsYaml.stageBDialogueLockBlock as string || "",
+    stageBDialogueLockLine: systemPromptsYaml.stageBDialogueLockLine as string || "",
+    stageBDialogueLockEmpty: systemPromptsYaml.stageBDialogueLockEmpty as string || "",
+    stageBBridgePrompt: systemPromptsYaml.stageBBridgePrompt as string || "",
+    stageBShotCountAbsolute: systemPromptsYaml.stageBShotCountAbsolute as string || "",
+    stageBShotCountPerScene: systemPromptsYaml.stageBShotCountPerScene as string || "",
+    stageBShotCountRange: systemPromptsYaml.stageBShotCountRange as string || "",
+    stageBDirectVisualization: systemPromptsYaml.stageBDirectVisualization as string || "",
+    stageBAtmosphereNarrative: systemPromptsYaml.stageBAtmosphereNarrative as string || "",
+    stageBMiniNarrative: systemPromptsYaml.stageBMiniNarrative as string || "",
+    stageBTensionFormatAtmosphere: systemPromptsYaml.stageBTensionFormatAtmosphere as string || "",
+    stageBTensionFormatStandard: systemPromptsYaml.stageBTensionFormatStandard as string || "",
+  }
 
   // 构建单镜修改配置
   const shotEdit: ShotEditConfig = {
@@ -335,10 +446,15 @@ export function loadPromptConfig(): PromptConfig {
     faithfulSuffix,
     faithfulSystemPrompt,
     assetTagInstruction,
+    nameMappingFormat,
+    propConsistencyRule,
+    systemPrompts,
   }
 
   lastLoadTime = Date.now()
-  console.log("[PromptLoader] Configuration loaded successfully")
+  if (isPromptLoaderVerbose) {
+    console.log("[PromptLoader] Configuration loaded successfully")
+  }
 
   return configCache
 }
@@ -359,7 +475,9 @@ export function getPromptConfig(): PromptConfig {
 export function clearPromptCache(): void {
   configCache = null
   lastLoadTime = 0
-  console.log("[PromptLoader] Cache cleared")
+  if (isPromptLoaderVerbose) {
+    console.log("[PromptLoader] Cache cleared")
+  }
 }
 
 /**

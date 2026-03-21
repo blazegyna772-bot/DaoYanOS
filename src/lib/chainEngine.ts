@@ -4,7 +4,7 @@
  * 用途：将剧本分场生成分镜，支持视觉桥梁传递
  */
 
-import type { Scene, BridgeState, ChatMessage, Project, PlatformConfig, Director } from "@/types"
+import type { Scene, BridgeState, ChatMessage, Project, PlatformConfig, Director, BeatType } from "@/types"
 import {
   buildFullSystemPrompt,
   buildBurstModePrompt,
@@ -32,6 +32,7 @@ export interface ChainEngineState {
 }
 
 export interface ChainEngineCallbacks {
+  onStageAComplete?: (scenes: Scene[]) => void
   onSceneStart?: (scene: Scene, index: number) => void
   onSceneProgress?: (sceneId: string, content: string) => void
   onSceneComplete?: (scene: Scene, content: string) => void
@@ -327,6 +328,242 @@ async function* callAPIStream(
 // ChainEngine 核心逻辑
 // ============================================
 
+const BEAT_TASK_MAP: Record<BeatType, string> = {
+  opening: "用一个静止的画面或镜头立刻传达故事情绪基调和主角所处世界状态，视觉上回应结局画面。",
+  setup: "展示主角在旧世界的日常，埋下将在高潮被呼应的道具、话语或关系。",
+  catalyst: "一个外部事件砸向主角，彻底打破旧世界平衡，并直接针对主角原始驱动力。",
+  debate: "呈现主角的犹豫、抗拒与改变代价，让观众感到跨越门槛的危险性。",
+  act2in: "主角主动做出选择，踏入新世界，必须体现主角的主动决策而非被动推进。",
+  bstory: "引入与主线形成反差或镜像的 B 故事人物或关系，并让其传递主题。",
+  fun: "展示主角在新世界中探索规则、尝试解决问题，兑现类型片的核心画面承诺。",
+  midpoint: "制造伪胜利或伪失败，作为主角命运的关键转折点。",
+  badclose: "让反派或障碍重新集结并全力压制主角，持续升级压力与冲突。",
+  allis: "让主角跌入最低谷，失去最重要的人、物或信念，完成旧自我的象征性死亡。",
+  dark: "主角独自面对黑暗，重新审视真正想要的东西并发生内在转化。",
+  act3in: "主角获得新解法，重新集结力量，主动出击。",
+  finale: "完成最终反击，建立新世界，并让结尾视觉上呼应开场形成闭环。",
+}
+
+const BEAT_TYPE_ALIASES: Array<{ pattern: RegExp; target: BeatType }> = [
+  { pattern: /(opening|intro|introduction|prologue|begin)/, target: "opening" },
+  { pattern: /(setup|statusquo|ordinary|normal|world)/, target: "setup" },
+  { pattern: /(catalyst|inciting|trigger|event|call)/, target: "catalyst" },
+  { pattern: /(reaction|response|debate|hesitat|dilemma|refus)/, target: "debate" },
+  { pattern: /(decision|choice|commit|cross|accept)/, target: "act2in" },
+  { pattern: /(bstory|subplot|ally|bond|relationship|mirror)/, target: "bstory" },
+  { pattern: /(fun|promise|explore|test|games)/, target: "fun" },
+  { pattern: /(midpoint|midpointturn|twist|turn|reversal|pivot)/, target: "midpoint" },
+  { pattern: /(badclose|pressure|confront|crisis|threat|chase|collapse)/, target: "badclose" },
+  { pattern: /(allis|lowpoint|break|loss|bottom|death)/, target: "allis" },
+  { pattern: /(dark|reflect|aftermath|despair|night)/, target: "dark" },
+  { pattern: /(act3in|plan|resolve|counter|regroup|return)/, target: "act3in" },
+  { pattern: /(finale|climax|resolution|ending|close|endgame)/, target: "finale" },
+]
+
+export function normalizeBeatType(rawBeatType: unknown, sceneIndex: number, totalScenes: number): BeatType {
+  if (typeof rawBeatType === "string") {
+    const normalized = rawBeatType.trim().toLowerCase().replace(/[\s_-]+/g, "")
+
+    if (normalized in BEAT_TASK_MAP) {
+      return normalized as BeatType
+    }
+
+    const alias = BEAT_TYPE_ALIASES.find(({ pattern }) => pattern.test(normalized))
+    if (alias) {
+      return alias.target
+    }
+  }
+
+  if (totalScenes <= 1) return "setup"
+  if (sceneIndex === 0) return "opening"
+  if (sceneIndex >= totalScenes - 1) return "finale"
+  if (sceneIndex === totalScenes - 2) return "act3in"
+  if (sceneIndex === totalScenes - 3) return "dark"
+
+  return "setup"
+}
+
+function getBeatTask(beatType: BeatType): string {
+  return BEAT_TASK_MAP[beatType] || ""
+}
+
+const FAITHFUL_SOURCE_MARKER = "━━━ 以下为原始剧本内容（一字不得改动）━━━"
+
+function extractOriginalPlotBody(plot: string): string {
+  const markerIndex = plot.indexOf(FAITHFUL_SOURCE_MARKER)
+  if (markerIndex === -1) {
+    return plot
+  }
+
+  return plot.slice(markerIndex + FAITHFUL_SOURCE_MARKER.length).trim() || plot
+}
+
+function fillMissingSceneSummaries(
+  scenes: Scene[],
+  plot: string,
+  mode: "slice" | "beatTask"
+): Scene[] {
+  if (scenes.length === 0) return scenes
+
+  const fallbackChunkLength = Math.ceil(plot.length / scenes.length)
+
+  return scenes.map((scene, index) => {
+    if (scene.contentSummary?.trim()) {
+      return scene
+    }
+
+    if (mode === "beatTask" && scene.beatTask?.trim()) {
+      return { ...scene, contentSummary: scene.beatTask.trim() }
+    }
+
+    const slice = plot.slice(index * fallbackChunkLength, (index + 1) * fallbackChunkLength).trim()
+    return { ...scene, contentSummary: slice || plot }
+  })
+}
+
+function hasDialogueLiteral(summary: string): boolean {
+  if (!summary.trim()) return false
+  if (summary.includes("台词原文：")) return true
+  return extractDialogueLinesFromText(summary).length > 0
+}
+
+const SPEAKER_DIALOGUE_LINE_RE = /^[A-Za-z\u4E00-\u9FFF][A-Za-z0-9\u4E00-\u9FFF·（）()]{0,15}[：:]\s*\S+/
+
+function normalizeDialogueCandidate(line: string): string {
+  return line
+    .trim()
+    .replace(/^[-*•·]+\s*/, "")
+    .replace(/^\d+[\.\-、]\s*/, "")
+    .replace(/^[①②③④⑤⑥⑦⑧⑨⑩]\s*/, "")
+}
+
+function isSpeakerDialogueLine(line: string): boolean {
+  if (!line) return false
+  if (line.startsWith("△") || line.startsWith("【") || line.startsWith("[")) return false
+  if (line.includes("1:1")) return false
+  return SPEAKER_DIALOGUE_LINE_RE.test(line)
+}
+
+function extractDialogueLinesFromText(text: string): string[] {
+  if (!text.trim()) return []
+
+  const rawSegments = text.includes("台词原文：")
+    ? text.split("台词原文：").slice(1).join("台词原文：").split(/\s*\/\s*|\r?\n/)
+    : text.split(/\r?\n/)
+
+  return rawSegments
+    .map(normalizeDialogueCandidate)
+    .filter(isSpeakerDialogueLine)
+}
+
+function extractDialogueLinesFromChunk(lines: string[]): string[] {
+  return extractDialogueLinesFromText(lines.join("\n"))
+}
+
+function mergeSceneDialogueLiteral(scene: Scene, rawScene: Record<string, unknown> | undefined): Scene {
+  const rawDialogue = typeof rawScene?.["台词原文"] === "string"
+    ? rawScene["台词原文"].trim()
+    : ""
+
+  if (!rawDialogue) {
+    return scene
+  }
+
+  const normalizedDialogueLines = extractDialogueLinesFromText(`台词原文：${rawDialogue}`)
+  if (normalizedDialogueLines.length === 0) {
+    return scene
+  }
+
+  const dialogueLiteral = normalizedDialogueLines.join(" / ")
+  if (scene.contentSummary.includes(dialogueLiteral)) {
+    return scene
+  }
+
+  return {
+    ...scene,
+    contentSummary: scene.contentSummary.trim()
+      ? `${scene.contentSummary.trim()} 台词原文：${dialogueLiteral}`
+      : `台词原文：${dialogueLiteral}`,
+  }
+}
+
+function mergeDialogueLinesIntoSummary(summary: string, dialogueLines: string[]): string {
+  if (dialogueLines.length === 0) {
+    return summary
+  }
+
+  const existingLines = extractDialogueLinesFromText(summary)
+  const mergedLines = Array.from(new Set([...existingLines, ...dialogueLines]))
+  if (mergedLines.length === 0) {
+    return summary
+  }
+
+  const baseSummary = summary.replace(/\s*台词原文：[\s\S]*$/, "").trim()
+  const dialogueBlock = `台词原文：${mergedLines.join(" / ")}`
+  return baseSummary ? `${baseSummary} ${dialogueBlock}` : dialogueBlock
+}
+
+export function reinforceDialogueInSceneSummaries(scenes: Scene[], plot: string): Scene[] {
+  if (scenes.length === 0 || !plot.trim()) return scenes
+
+  const plotLines = extractOriginalPlotBody(plot)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  if (plotLines.length === 0) return scenes
+
+  return scenes.map((scene, index) => {
+    const start = Math.floor((index / scenes.length) * plotLines.length)
+    const end = index === scenes.length - 1
+      ? plotLines.length
+      : Math.ceil(((index + 1) / scenes.length) * plotLines.length)
+    const dialogueLines = extractDialogueLinesFromChunk(plotLines.slice(start, end)).slice(0, 3)
+
+    if (dialogueLines.length === 0) {
+      return scene
+    }
+
+    return {
+      ...scene,
+      contentSummary: mergeDialogueLinesIntoSummary(scene.contentSummary || "", dialogueLines),
+    }
+  })
+}
+
+function normalizeSceneDurations(scenes: Scene[], totalDuration: number): Scene[] {
+  if (scenes.length === 0) return scenes
+
+  const currentTotal = scenes.reduce((sum, scene) => sum + scene.duration, 0)
+  if (currentTotal <= 0) {
+    const average = Math.floor(totalDuration / scenes.length)
+    return scenes.map((scene, index) => ({
+      ...scene,
+      duration: index === scenes.length - 1 ? totalDuration - average * (scenes.length - 1) : average,
+    }))
+  }
+
+  const ratio = totalDuration / currentTotal
+  let remainingDuration = totalDuration
+
+  return scenes.map((scene, index) => {
+    const remainingScenes = scenes.length - index
+
+    if (index === scenes.length - 1) {
+      return { ...scene, duration: Math.max(1, remainingDuration) }
+    }
+
+    const maxAllowed = Math.max(1, remainingDuration - (remainingScenes - 1))
+    const normalizedDuration = Math.min(
+      maxAllowed,
+      Math.max(1, Math.round(scene.duration * ratio))
+    )
+    remainingDuration -= normalizedDuration
+
+    return { ...scene, duration: normalizedDuration }
+  })
+}
+
 /**
  * 创建 ChainEngine 实例
  */
@@ -387,6 +624,7 @@ export async function stageA_SplitScenes(
 
   // 解析 JSON 响应
   let scenes: Scene[] = []
+  const sourcePlot = extractOriginalPlotBody(plot)
   try {
     // 提取 JSON（可能被 markdown 包裹）
     let content = response.content.trim()
@@ -401,26 +639,33 @@ export async function stageA_SplitScenes(
     }
 
     const parsed = JSON.parse(content.trim())
-    scenes = (parsed.scenes || []).map((s: Partial<Scene>, index: number) => ({
-      id: s.id || `scene_${String(index + 1).padStart(3, "0")}`,
-      name: s.name || `场次 ${index + 1}`,
-      beatType: s.beatType || "setup",
-      duration: s.duration || Math.floor(duration / 3),
-      narrativeMode: s.narrativeMode || determineNarrativeMode(duration),
-      contentSummary: s.contentSummary || "",
-      bridgeState: s.bridgeState,
-    }))
+    const parsedScenes = Array.isArray(parsed.scenes) ? parsed.scenes : []
+    scenes = parsedScenes.map((rawScene: unknown, index: number) => {
+      const s = (rawScene || {}) as Partial<Scene>
+      const beatType = normalizeBeatType(s.beatType, index, parsedScenes.length)
+
+      return {
+        id: s.id || `scene_${String(index + 1).padStart(3, "0")}`,
+        name: s.name || `场次 ${index + 1}`,
+        beatType,
+        beatTask: getBeatTask(beatType),
+        duration: s.duration || Math.floor(duration / 3),
+        narrativeMode: s.narrativeMode || determineNarrativeMode(duration),
+        contentSummary: s.contentSummary || "",
+        estimatedDuration: s.duration || Math.floor(duration / 3),
+        bridgeState: s.bridgeState,
+      }
+    })
 
     // 确保时长总和正确
     const totalSceneDuration = scenes.reduce((sum: number, s: Scene) => sum + s.duration, 0)
     if (Math.abs(totalSceneDuration - duration) > 5) {
-      // 按比例调整
-      const ratio = duration / totalSceneDuration
-      scenes = scenes.map((s: Scene) => ({
-        ...s,
-        duration: Math.round(s.duration * ratio),
-      }))
+      scenes = normalizeSceneDurations(scenes, duration)
     }
+
+    scenes = fillMissingSceneSummaries(scenes, sourcePlot, "slice")
+    scenes = scenes.map((scene, index) => mergeSceneDialogueLiteral(scene, parsedScenes[index] as Record<string, unknown> | undefined))
+    scenes = reinforceDialogueInSceneSummaries(scenes, sourcePlot)
 
     engineLog("StageA", `✓ 切分成功`, {
       sceneCount: scenes.length,
@@ -436,17 +681,22 @@ export async function stageA_SplitScenes(
       id: `scene_${String(i + 1).padStart(3, "0")}`,
       name: `场次 ${i + 1}`,
       beatType: "setup" as const,
+      beatTask: getBeatTask("setup"),
       duration: avgDuration,
       narrativeMode: determineNarrativeMode(duration),
       contentSummary: "",
+      estimatedDuration: avgDuration,
     }))
+
+    scenes = fillMissingSceneSummaries(scenes, sourcePlot, "beatTask")
+    scenes = reinforceDialogueInSceneSummaries(scenes, sourcePlot)
 
     engineLog("StageA", `✓ 降级切分`, { sceneCount, avgDuration })
   }
 
   engine.scenes = scenes
   engine.totalDuration = duration
-  engine.cleanPlot = plot
+  engine.cleanPlot = sourcePlot
 
   return scenes
 }
@@ -522,26 +772,22 @@ export async function stageB_GenerateScene(
     hasPreviousBridge: !!engine.previousBridgeState,
   })
 
-  // 构建系统提示词
-  const systemPrompt = buildFullSystemPrompt(options)
+  const sceneIndex = engine.scenes.findIndex((item) => item.id === scene.id)
+  const { systemPrompt, userPrompt: stageBUserPrompt } = buildStageBPrompt(
+    scene,
+    sceneIndex >= 0 ? sceneIndex : 0,
+    engine.scenes.length || 1,
+    engine.globalOffset,
+    engine.previousBridgeState,
+    options
+  )
 
   engineLog("StageB", `System Prompt (${systemPrompt.length}字符)`, systemPrompt.slice(0, 500))
 
   // 构建用户消息
-  let userMessage = `【本场剧本内容】：\n${scene.contentSummary || plot}`
-
-  // 如果有上一场的视觉桥梁，注入到提示词
-  if (engine.previousBridgeState) {
-    userMessage = `【视觉桥梁（承接上一场）】：
-- 角色位置：${engine.previousBridgeState.charPosition}
-- 光线状态：${engine.previousBridgeState.lightPhase}
-- 环境状态：${engine.previousBridgeState.environment}
-- 关键道具：${engine.previousBridgeState.keyProp}
-
-${userMessage}`
-
-    engineLog("StageB", `注入视觉桥梁`, engine.previousBridgeState)
-  }
+  const userMessage = scene.contentSummary?.trim()
+    ? stageBUserPrompt
+    : `【本场次剧本（唯一依据，不得超出此范围）】\n${plot}`
 
   engineLog("StageB", `User Message (${userMessage.length}字符)`, userMessage.slice(0, 500))
 
@@ -732,6 +978,7 @@ export async function runChainGeneration(
       isSTCEnabled,
       directors
     )
+    callbacks?.onStageAComplete?.(scenes)
 
     // Stage B: 逐场生成
     engineLog("Chain", `────────────────────────────────────────`, "")

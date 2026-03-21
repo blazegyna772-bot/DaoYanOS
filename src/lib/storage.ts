@@ -175,6 +175,11 @@ export function createEmptyProject(): Project {
         plotInput: "",
         scenes: [],
         shots: [],
+        assetRefs: {
+          characterIds: [],
+          imageIds: [],
+          propIds: [],
+        },
       },
     ],
   }

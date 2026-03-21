@@ -1,0 +1,191 @@
+# AI 平台配置
+# 支持的所有 AI 平台定义，包含模型列表、端点、API Key 信息等
+
+platforms:
+  openai:
+    name: OpenAI
+    nameEn: OpenAI
+    description: GPT-4 / GPT-3.5 · 全球通用
+    icon: 🤖
+    color: from-emerald-500 to-teal-600
+    recommended: true
+    textModels:
+      - gpt-4
+      - gpt-4-turbo
+      - gpt-3.5-turbo
+    visionModels:
+      - gpt-4-vision-preview
+    defaultTextEndpoint: https://api.openai.com/v1/chat/completions
+    defaultVisionEndpoint: https://api.openai.com/v1/chat/completions
+    keyPlaceholder: sk-xxxxxxxxxxxxxxxxxxxxxxxx
+    keyUrl: https://platform.openai.com/api-keys
+
+  claude:
+    name: Claude
+    nameEn: Anthropic
+    description: 图像理解强 · Anthropic
+    icon: 🧬
+    color: from-amber-500 to-orange-600
+    recommended: true
+    textModels:
+      - claude-3-sonnet-20240229
+      - claude-3-opus-20240229
+      - claude-3-haiku-20240307
+    visionModels:
+      - claude-3-sonnet-20240229
+      - claude-3-opus-20240229
+    defaultTextEndpoint: https://api.anthropic.com/v1/messages
+    defaultVisionEndpoint: https://api.anthropic.com/v1/messages
+    keyPlaceholder: sk-ant-api03-xxxxxxxx
+    keyUrl: https://console.anthropic.com/settings/keys
+
+  gemini:
+    name: Gemini
+    nameEn: Google
+    description: 支持视频 · Google
+    icon: ♊
+    color: from-blue-500 to-indigo-600
+    recommended: false
+    textModels:
+      - gemini-1.5-pro
+      - gemini-1.5-flash
+    visionModels:
+      - gemini-1.5-pro-vision
+    defaultTextEndpoint: https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent
+    defaultVisionEndpoint: https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro-vision:generateContent
+    keyPlaceholder: AIzaSyxxxxxxxxxxxxxxxx
+    keyUrl: https://aistudio.google.com/app/apikey
+
+  doubao:
+    name: 豆包
+    nameEn: Doubao
+    description: 字节跳动 · 国内
+    icon: 🫘
+    color: from-blue-400 to-cyan-500
+    recommended: false
+    textModels:
+      - doubao-pro-128k
+      - doubao-lite-128k
+    visionModels:
+      - doubao-vision
+    defaultTextEndpoint: https://ark.cn-beijing.volces.com/api/v3/chat/completions
+    defaultVisionEndpoint: https://ark.cn-beijing.volces.com/api/v3/chat/completions
+    keyPlaceholder: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+    keyUrl: https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey
+
+  deepseek:
+    name: DeepSeek
+    nameEn: DeepSeek
+    description: 深度求索 · 性价比
+    icon: 🔍
+    color: from-purple-500 to-violet-600
+    recommended: true
+    textModels:
+      - deepseek-chat
+      - deepseek-coder
+    visionModels: []
+    defaultTextEndpoint: https://api.deepseek.com/v1/chat/completions
+    defaultVisionEndpoint: ""
+    keyPlaceholder: sk-xxxxxxxxxxxxxxxx
+    keyUrl: https://platform.deepseek.com/api_keys
+
+  qwen:
+    name: 通义千问
+    nameEn: Qwen
+    description: 阿里云 · 国内稳定
+    icon: 🌐
+    color: from-orange-500 to-red-500
+    recommended: true
+    textModels:
+      - qwen-max
+      - qwen-plus
+      - qwen-turbo
+      - qwen-long
+    visionModels:
+      - qwen-vl-max
+      - qwen-vl-plus
+    defaultTextEndpoint: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+    defaultVisionEndpoint: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+    keyPlaceholder: sk-xxxxxxxxxxxxxxxx
+    keyUrl: https://dashscope.console.aliyun.com/apiKey
+
+  moonshot:
+    name: Kimi
+    nameEn: Moonshot
+    description: 月之暗面 · 长文本
+    icon: 🌙
+    color: from-cyan-500 to-blue-600
+    recommended: true
+    textModels:
+      - moonshot-v1-128k
+      - moonshot-v1-32k
+      - moonshot-v1-8k
+    visionModels: []
+    defaultTextEndpoint: https://api.moonshot.cn/v1/chat/completions
+    defaultVisionEndpoint: ""
+    keyPlaceholder: sk-xxxxxxxxxxxxxxxx
+    keyUrl: https://platform.moonshot.cn/console/api-keys
+
+  siliconflow:
+    name: SiliconFlow
+    nameEn: SiliconFlow
+    description: 硅基流动 · 多模型
+    icon: ⚡
+    color: from-yellow-500 to-amber-600
+    recommended: false
+    textModels:
+      - Qwen/Qwen2-72B-Instruct
+      - deepseek-ai/DeepSeek-V2-Chat
+    visionModels: []
+    defaultTextEndpoint: https://api.siliconflow.cn/v1/chat/completions
+    defaultVisionEndpoint: ""
+    keyPlaceholder: sk-xxxxxxxxxxxxxxxx
+    keyUrl: https://cloud.siliconflow.cn/account/ak
+
+  openrouter:
+    name: OpenRouter
+    nameEn: OpenRouter
+    description: 聚合平台 · 含Claude
+    icon: 🔀
+    color: from-gray-500 to-slate-600
+    recommended: false
+    textModels:
+      - anthropic/claude-3-sonnet
+      - openai/gpt-4
+      - google/gemini-pro
+    visionModels:
+      - anthropic/claude-3-sonnet
+    defaultTextEndpoint: https://openrouter.ai/api/v1/chat/completions
+    defaultVisionEndpoint: https://openrouter.ai/api/v1/chat/completions
+    keyPlaceholder: sk-or-v1-xxxxxxxx
+    keyUrl: https://openrouter.ai/keys
+
+  custom:
+    name: 自定义
+    nameEn: Custom
+    description: 任意兼容端点
+    icon: 🔧
+    color: from-gray-400 to-gray-600
+    recommended: false
+    textModels:
+      - custom-model
+    visionModels: []
+    defaultTextEndpoint: https://your-api-endpoint.com/v1/chat/completions
+    defaultVisionEndpoint: ""
+    keyPlaceholder: your-api-key
+    keyUrl: ""
+
+# 平台请求头配置
+# 不同平台需要不同的请求头格式
+platformHeaders:
+  claude:
+    x-api-key: "{apiKey}"
+    anthropic-version: "2023-06-01"
+  qwen:
+    Authorization: "API-Key {apiKey}"
+  openrouter:
+    Authorization: "Bearer {apiKey}"
+    HTTP-Referer: "https://daoyanos.com"
+    X-Title: "DaoYanOS"
+  default:
+    Authorization: "Bearer {apiKey}"

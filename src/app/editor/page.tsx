@@ -29,6 +29,7 @@ import {
   XCircle,
   CheckCircle2,
   AlertCircle,
+  Code,
 } from "lucide-react"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Button } from "@/components/ui/button"
@@ -37,6 +38,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { DevLogPanel, DevLogToggle } from "@/components/dev-log-panel"
 import { devLogger } from "@/lib/devLogger"
 import {
@@ -60,6 +62,139 @@ import type { Project, Director, Episode } from "@/types"
 import { generationStore } from "@/lib/generationStore"
 
 const directorCategories = ["narrative", "atmosphere", "suspense", "anime", "stcOff"] as const
+const AUTO_SAVE_DELAY_MS = 5000
+
+type SaveState = "saved" | "dirty" | "saving" | "error"
+type PageFeedback = {
+  type: "success" | "error" | "info"
+  text: string
+}
+
+function rebuildAssetNameMap(assets: Pick<Project["assets"], "character" | "image" | "props">) {
+  const assetNameMap: Record<string, string> = {}
+
+  assets.character.forEach((asset, index) => {
+    const name = asset.name.trim()
+    if (name) assetNameMap[name] = `@人物${index + 1}`
+  })
+
+  assets.image.forEach((asset, index) => {
+    const name = asset.name.trim()
+    if (name) assetNameMap[name] = `@图片${index + 1}`
+  })
+
+  assets.props.forEach((asset, index) => {
+    const name = asset.name.trim()
+    if (name) assetNameMap[name] = `@道具${index + 1}`
+  })
+
+  return assetNameMap
+}
+
+function createEmptyEpisodeAssetRefs() {
+  return {
+    characterIds: [] as string[],
+    imageIds: [] as string[],
+    propIds: [] as string[],
+  }
+}
+
+function mergeUniqueIds(existing: string[], incoming: string[]) {
+  return Array.from(new Set([...(existing || []), ...(incoming || [])]))
+}
+
+function buildProjectWithExtractedAssets(project: Project, extractedAssets: any, activeEpisodeId: string) {
+  const existingAssets = project.assets || {
+    character: [],
+    image: [],
+    props: [],
+    assetNameMap: {},
+    assetTagEnabled: { character: true, image: true, props: true },
+  }
+
+  const newCharacters = (extractedAssets.characters || []).map((char: any) => ({
+    id: `char_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    name: char.name,
+    desc: char.desc || "",
+    type: "character" as const,
+  }))
+
+  const newScenes = (extractedAssets.scenes || []).map((scene: any) => ({
+    id: `scene_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    name: scene.name,
+    desc: scene.desc || "",
+    type: "image" as const,
+  }))
+
+  const newProps = (extractedAssets.props || []).map((prop: any) => ({
+    id: `prop_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    name: prop.name,
+    desc: prop.desc || "",
+    type: "props" as const,
+  }))
+
+  const mergeAssets = (existing: any[], incoming: any[]) => {
+    const existingNames = new Set(existing.map((asset) => asset.name))
+    const uniqueIncoming = incoming.filter((asset) => !existingNames.has(asset.name))
+    return [...existing, ...uniqueIncoming]
+  }
+
+  const nextAssetsBase = {
+    character: mergeAssets(existingAssets.character, newCharacters),
+    image: mergeAssets(existingAssets.image, newScenes),
+    props: mergeAssets(existingAssets.props, newProps),
+    assetTagEnabled: existingAssets.assetTagEnabled,
+  }
+
+  const nextAssets = {
+    ...nextAssetsBase,
+    assetNameMap: rebuildAssetNameMap(nextAssetsBase),
+  }
+
+  const extractedCharacterNames = new Set((extractedAssets.characters || []).map((item: { name: string }) => item.name))
+  const extractedSceneNames = new Set((extractedAssets.scenes || []).map((item: { name: string }) => item.name))
+  const extractedPropNames = new Set((extractedAssets.props || []).map((item: { name: string }) => item.name))
+
+  const extractedAssetRefs = {
+    characterIds: nextAssets.character.filter((asset) => extractedCharacterNames.has(asset.name)).map((asset) => asset.id),
+    imageIds: nextAssets.image.filter((asset) => extractedSceneNames.has(asset.name)).map((asset) => asset.id),
+    propIds: nextAssets.props.filter((asset) => extractedPropNames.has(asset.name)).map((asset) => asset.id),
+  }
+
+  return {
+    ...project,
+    assets: nextAssets,
+    episodes: project.episodes.map((episode) =>
+      episode.id === activeEpisodeId
+        ? {
+            ...episode,
+            assetRefs: {
+              characterIds: mergeUniqueIds(episode.assetRefs?.characterIds || [], extractedAssetRefs.characterIds),
+              imageIds: mergeUniqueIds(episode.assetRefs?.imageIds || [], extractedAssetRefs.imageIds),
+              propIds: mergeUniqueIds(episode.assetRefs?.propIds || [], extractedAssetRefs.propIds),
+            },
+          }
+        : episode
+    ),
+  }
+}
+
+function parseDurationFromTimeRange(timeRange: string, fallback = 5) {
+  const rangeMatch = timeRange.match(/(\d+(?:\.\d+)?)\s*s?\s*-\s*(\d+(?:\.\d+)?)\s*s?/)
+  if (rangeMatch) {
+    const start = Number.parseFloat(rangeMatch[1])
+    const end = Number.parseFloat(rangeMatch[2])
+    if (end > start) return end - start
+  }
+
+  const singleMatch = timeRange.match(/(\d+(?:\.\d+)?)/)
+  if (singleMatch) {
+    const value = Number.parseFloat(singleMatch[1])
+    return value > 0 ? value : fallback
+  }
+
+  return fallback
+}
 
 // 视觉风格数据
 const visualStyles = [
@@ -90,10 +225,15 @@ function EditorPageInner() {
 
   const [project, setProject] = useState<Project | null>(null)
   const [isLoading, setIsLoading] = useState(true)
-  const [isSaving, setIsSaving] = useState(false)
+  const [saveState, setSaveState] = useState<SaveState>("saved")
   const [error, setError] = useState<string | null>(null)
+  const [pageFeedback, setPageFeedback] = useState<PageFeedback | null>(null)
   const [activeEpisodeId, setActiveEpisodeId] = useState<string>("")
   const activeEpisode = project?.episodes.find((ep) => ep.id === activeEpisodeId)
+  const didHydrateProjectRef = useRef(false)
+  const projectVersionRef = useRef(0)
+  const latestProjectRef = useRef<Project | null>(null)
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // 生成状态
   const [isGenerating, setIsGenerating] = useState(false)
@@ -121,6 +261,15 @@ function EditorPageInner() {
 
   // 从 API 加载项目
   useEffect(() => {
+    didHydrateProjectRef.current = false
+    projectVersionRef.current = 0
+    latestProjectRef.current = null
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current)
+      autoSaveTimerRef.current = null
+    }
+    setSaveState("saved")
+
     if (projectId) {
       loadProject(projectId)
     } else {
@@ -156,7 +305,7 @@ function EditorPageInner() {
         },
         currentPlatformId: "openai",
         platforms: [{ id: "openai", name: "OpenAI", description: "GPT-4 / GPT-3.5", icon: "🤖", color: "from-emerald-500 to-teal-600", textEndpoint: "https://api.openai.com/v1/chat/completions", textModel: "gpt-4", textApiKey: "", visionEndpoint: "https://api.openai.com/v1/chat/completions", visionModel: "gpt-4-vision-preview", visionApiKey: "", mode: "openai", enabled: true }],
-        episodes: [{ id: `ep_${Date.now()}`, name: "第一集", plotInput: "", scenes: [], shots: [] }],
+        episodes: [{ id: `ep_${Date.now()}`, name: "第一集", plotInput: "", scenes: [], shots: [], assetRefs: createEmptyEpisodeAssetRefs() }],
       }
       setProject(newProject)
       setIsLoading(false)
@@ -180,34 +329,92 @@ function EditorPageInner() {
     }
   }
 
-  // 保存项目
-  const handleSave = useCallback(async () => {
-    if (!project) return
+  const clearAutoSaveTimer = useCallback(() => {
+    if (!autoSaveTimerRef.current) return
+    clearTimeout(autoSaveTimerRef.current)
+    autoSaveTimerRef.current = null
+  }, [])
+
+  const persistProject = useCallback(async (projectToSave: Project | null, version: number) => {
+    if (!projectToSave) return false
+
     try {
-      setIsSaving(true)
-      const response = await fetch(`/api/projects/${project.id}`, {
+      setSaveState("saving")
+      const response = await fetch(`/api/projects/${projectToSave.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ project }),
+        body: JSON.stringify({ project: projectToSave }),
       })
+
       if (!response.ok) {
-        console.error("Failed to save project")
+        throw new Error("Failed to save project")
       }
+
+      if (projectVersionRef.current === version) {
+        setSaveState("saved")
+      } else {
+        setSaveState("dirty")
+      }
+
+      return true
     } catch (err) {
       console.error("Failed to save project:", err)
-    } finally {
-      setIsSaving(false)
+      setSaveState(projectVersionRef.current === version ? "error" : "dirty")
+      return false
     }
-  }, [project])
+  }, [])
 
-  // 自动保存（防抖）
+  // 保存项目
+  const handleSave = useCallback(async () => {
+    clearAutoSaveTimer()
+    return persistProject(latestProjectRef.current, projectVersionRef.current)
+  }, [clearAutoSaveTimer, persistProject])
+
+  // 跟踪项目变化并自动保存
   useEffect(() => {
+    latestProjectRef.current = project
     if (!project) return
-    const timer = setTimeout(() => {
-      handleSave()
-    }, 2000) // 2秒后自动保存
-    return () => clearTimeout(timer)
-  }, [project, handleSave])
+
+    if (!didHydrateProjectRef.current) {
+      didHydrateProjectRef.current = true
+      setSaveState("saved")
+      return
+    }
+
+    const version = ++projectVersionRef.current
+    setSaveState("dirty")
+    clearAutoSaveTimer()
+    autoSaveTimerRef.current = setTimeout(() => {
+      void persistProject(project, version)
+    }, AUTO_SAVE_DELAY_MS)
+
+    return clearAutoSaveTimer
+  }, [project, clearAutoSaveTimer, persistProject])
+
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (saveState !== "dirty" && saveState !== "saving" && saveState !== "error") return
+      event.preventDefault()
+      event.returnValue = ""
+    }
+
+    window.addEventListener("beforeunload", handleBeforeUnload)
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload)
+  }, [saveState])
+
+  useEffect(() => {
+    if (!pageFeedback) return
+
+    const timer = window.setTimeout(() => {
+      setPageFeedback(null)
+    }, 4500)
+
+    return () => window.clearTimeout(timer)
+  }, [pageFeedback])
+
+  const showPageFeedback = useCallback((type: PageFeedback["type"], text: string) => {
+    setPageFeedback({ type, text })
+  }, [])
 
   // 生成分镜 - 立即跳转到分镜页面
   const handleGenerate = useCallback(async () => {
@@ -215,7 +422,7 @@ function EditorPageInner() {
 
     // 验证必填项
     if (!activeEpisode?.plotInput.trim()) {
-      alert("请先输入剧本内容")
+      showPageFeedback("error", "请先输入剧本内容")
       return
     }
 
@@ -224,12 +431,12 @@ function EditorPageInner() {
 
     // 立即跳转到分镜页（分镜页负责初始化生成状态）
     router.push(`/editor/shots?id=${project.id}&generating=true&episodeId=${activeEpisodeId}`)
-  }, [project, activeEpisode, activeEpisodeId, handleSave, router])
+  }, [project, activeEpisode, activeEpisodeId, handleSave, router, showPageFeedback])
 
   // 提取资产
   const handleExtractAssets = useCallback(async () => {
     if (!activeEpisode?.plotInput.trim()) {
-      alert("请先输入剧本内容")
+      showPageFeedback("error", "请先输入剧本内容")
       return
     }
 
@@ -256,69 +463,23 @@ function EditorPageInner() {
       devLogger.info("✅ 资产提取成功", data)
 
       if (data.success && data.assets) {
-        // 追加资产（保留现有资产，按 name 去重）
-        setProject((prev) => {
-          if (!prev) return prev
+        const projectToUpdate = latestProjectRef.current
+        if (!projectToUpdate) {
+          throw new Error("项目未加载完成，无法写入提取结果")
+        }
 
-          const existingAssets = prev.assets || {
-            character: [],
-            image: [],
-            props: [],
-            assetNameMap: {},
-            assetTagEnabled: { character: true, image: true, props: true },
-          }
+        const nextProject = buildProjectWithExtractedAssets(projectToUpdate, data.assets, activeEpisodeId)
+        setProject(nextProject)
 
-          // 提取新资产
-          const newCharacters = (data.assets.characters || []).map((char: any) => ({
-            id: `char_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-            name: char.name,
-            desc: char.desc || "",
-            type: "character" as const,
-          }))
-
-          const newScenes = (data.assets.scenes || []).map((scene: any) => ({
-            id: `scene_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-            name: scene.name,
-            desc: scene.desc || "",
-            type: "image" as const,
-          }))
-
-          const newProps = (data.assets.props || []).map((prop: any) => ({
-            id: `prop_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-            name: prop.name,
-            desc: prop.desc || "",
-            type: "props" as const,
-          }))
-
-          // 合并并去重（按 name 字段）
-          const mergeAssets = (existing: any[], newItems: any[]) => {
-            const existingNames = new Set(existing.map((a) => a.name))
-            const uniqueNew = newItems.filter((a) => !existingNames.has(a.name))
-            return [...existing, ...uniqueNew]
-          }
-
-          const newAssets = {
-            character: mergeAssets(existingAssets.character, newCharacters),
-            image: mergeAssets(existingAssets.image, newScenes),
-            props: mergeAssets(existingAssets.props, newProps),
-            assetNameMap: { ...existingAssets.assetNameMap },
-            assetTagEnabled: existingAssets.assetTagEnabled,
-          }
-
-          const newProject = {
-            ...prev,
-            assets: newAssets,
-          }
-
-          // 自动保存到服务器
-          fetch(`/api/projects/${prev.id}`, {
+        try {
+          await fetch(`/api/projects/${nextProject.id}`, {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ project: newProject }),
-          }).catch((err) => console.error("自动保存失败:", err))
-
-          return newProject
-        })
+            body: JSON.stringify({ project: nextProject }),
+          })
+        } catch (persistError) {
+          devLogger.error("资产提取结果落盘失败", persistError)
+        }
 
         // 统计提取数量
         const counts = {
@@ -326,19 +487,25 @@ function EditorPageInner() {
           scenes: data.assets.scenes?.length || 0,
           props: data.assets.props?.length || 0,
         }
-        alert(`提取完成！\n人物: ${counts.characters}个\n场景: ${counts.scenes}个\n道具: ${counts.props}个`)
+        showPageFeedback(
+          data.source === "fallback" ? "info" : "success",
+          `${data.source === "fallback" ? "提取完成（本地兜底）" : "提取完成"}\n人物: ${counts.characters}个\n场景: ${counts.scenes}个\n道具: ${counts.props}个`
+        )
+        if (data.source === "fallback" && data.warning) {
+          devLogger.info("ℹ️ 资产提取改用本地兜底", { warning: data.warning })
+        }
       } else if (data.rawContent) {
         // AI 返回了非 JSON 内容
-        console.log("Raw AI response:", data.rawContent)
-        alert("提取结果格式异常，请查看控制台")
+        devLogger.error("资产提取格式异常", { rawContent: data.rawContent })
+        showPageFeedback("error", "提取结果格式异常，请打开开发日志查看原始响应")
       }
     } catch (error) {
       console.error("Asset extraction error:", error)
-      alert(`提取失败: ${(error as Error).message}`)
+      showPageFeedback("error", `提取失败: ${(error as Error).message}`)
     } finally {
       setIsExtractingAssets(false)
     }
-  }, [activeEpisode?.plotInput])
+  }, [activeEpisode?.plotInput, activeEpisodeId, showPageFeedback])
 
   // 解析 Markdown 表格为镜头数组
   const parseShotsFromMarkdown = (markdown: string) => {
@@ -365,8 +532,8 @@ function EditorPageInner() {
             index: shotIndex,
             globalIndex: shotIndex,
             type: cells[1]?.trim() || "中景",
-            duration: parseInt(cells[0]?.match(/\d+/)?.[0] || "5"),
-            timeRange: "", // 先留空，后面统一计算
+            duration: parseDurationFromTimeRange(cells[0]?.trim() || "", 5),
+            timeRange: cells[0]?.trim() || "",
             // 核心字段
             env: cells[3]?.trim() || "",
             action: cells[3]?.trim() || "",
@@ -390,11 +557,12 @@ function EditorPageInner() {
     // 统一根据 duration 计算 timeRange
     let offset = 0
     for (const shot of shots) {
-      shot.timeRange = `${offset}-${offset + shot.duration}s`
+      if (!shot.timeRange) {
+        shot.timeRange = `${offset}-${offset + shot.duration}s`
+      }
       offset += shot.duration
     }
 
-    console.log("解析完成，镜头数:", shots.length)
     devLogger.parse("📊 解析镜头", { inputLength: markdown.length, outputCount: shots.length, preview: shots.slice(0, 2) })
     return shots
   }
@@ -445,6 +613,7 @@ function EditorPageInner() {
       plotInput: "",
       scenes: [],
       shots: [],
+      assetRefs: createEmptyEpisodeAssetRefs(),
     }
     setProject((p) => ({ ...p, episodes: [...p.episodes, newEp] }))
     setActiveEpisodeId(newEp.id)
@@ -526,6 +695,15 @@ function EditorPageInner() {
               <Film className="w-3.5 h-3.5" />
               分镜
             </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1.5 text-xs"
+              onClick={() => router.push(`/editor/prompts?id=${project.id}&episodeId=${activeEpisodeId}`)}
+            >
+              <Code className="w-3.5 h-3.5" />
+              提示词
+            </Button>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -585,17 +763,30 @@ function EditorPageInner() {
           <Button
             variant="outline"
             size="sm"
-            className="h-7 gap-1.5 text-xs"
+            className="h-7 gap-1.5 text-xs min-w-[84px]"
             onClick={handleSave}
-            disabled={isSaving}
+            disabled={saveState === "saving"}
           >
-            {isSaving ? (
+            {saveState === "saving" ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
             ) : (
               <Save className="w-3.5 h-3.5" />
             )}
-            {isSaving ? "保存中..." : "保存"}
+            保存
           </Button>
+          <span
+            className={`min-w-[48px] text-center text-[11px] ${
+              saveState === "saved"
+                ? "text-muted-foreground"
+                : saveState === "dirty"
+                  ? "text-amber-500"
+                  : saveState === "saving"
+                    ? "text-amber-500"
+                    : "text-destructive"
+            }`}
+          >
+            {saveState === "saved" ? "已保存" : saveState === "dirty" ? "未保存" : saveState === "saving" ? "保存中" : "失败"}
+          </span>
 
           {/* 生成分镜按钮 */}
           <Button
@@ -622,6 +813,29 @@ function EditorPageInner() {
           </Button>
         </div>
       </header>
+
+      {pageFeedback && (
+        <div className="px-4 pt-3">
+          <Alert
+            className={
+              pageFeedback.type === "error"
+                ? "border-destructive/30 bg-destructive/5 text-destructive"
+                : pageFeedback.type === "success"
+                  ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300"
+                  : "border-amber-500/30 bg-amber-500/5 text-amber-700 dark:text-amber-300"
+            }
+          >
+            {pageFeedback.type === "error" ? (
+              <AlertCircle className="w-4 h-4" />
+            ) : (
+              <CheckCircle2 className="w-4 h-4" />
+            )}
+            <AlertDescription className="whitespace-pre-wrap text-xs">
+              {pageFeedback.text}
+            </AlertDescription>
+          </Alert>
+        </div>
+      )}
 
       <div className="flex-1 flex overflow-hidden">
 

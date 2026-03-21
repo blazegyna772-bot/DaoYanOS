@@ -1,12 +1,16 @@
 {
   "name": "daoyanos",
-  "version": "0.2.0",
+  "version": "0.2.4",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "verify:shot-edit": "tsc -p tsconfig.shot-edit-regression.json && node .tmp/shot-edit-regression/scripts/shot-edit-regression.js",
+    "verify:source-chain": "tsc -p tsconfig.source-chain-regression.json && node .tmp/source-chain-regression/scripts/source-chain-regression.js",
+    "verify:regression": "npm run verify:shot-edit && npm run verify:source-chain",
+    "review:source-quality": "tsc -p tsconfig.source-quality-review.json && node .tmp/source-quality-review/scripts/source-quality-review.js"
   },
   "dependencies": {
     "@base-ui/react": "^1.0.0",

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo, Suspense, useEffect, useCallback } from "react"
+import { useState, useMemo, Suspense, useEffect, useCallback, useRef } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import {
   ArrowLeft,
@@ -24,6 +24,8 @@ import {
   Sparkles,
   X,
   Tag,
+  Video,
+  Code,
 } from "lucide-react"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Button } from "@/components/ui/button"
@@ -45,6 +47,92 @@ const assetTabs: { id: AssetTab; label: string; icon: React.ElementType }[] = [
   { id: "props", label: "道具", icon: Archive },
 ]
 
+const assetTypeLabels: Record<AssetType, string> = {
+  character: "角色",
+  image: "场景",
+  props: "道具",
+}
+
+function rebuildAssetNameMap(assets: Project["assets"]) {
+  const assetNameMap: Record<string, string> = {}
+
+  assets.character.forEach((asset, index) => {
+    const name = asset.name.trim()
+    if (name) assetNameMap[name] = `@人物${index + 1}`
+  })
+
+  assets.image.forEach((asset, index) => {
+    const name = asset.name.trim()
+    if (name) assetNameMap[name] = `@图片${index + 1}`
+  })
+
+  assets.props.forEach((asset, index) => {
+    const name = asset.name.trim()
+    if (name) assetNameMap[name] = `@道具${index + 1}`
+  })
+
+  return assetNameMap
+}
+
+function withUpdatedAssets(project: Project, assets: Project["assets"]): Project {
+  return {
+    ...project,
+    assets: {
+      ...assets,
+      assetNameMap: rebuildAssetNameMap(assets),
+    },
+  }
+}
+
+function buildAssetTagToIdMap(project: Project | null) {
+  const map = new Map<string, string>()
+  if (!project) return map
+
+  project.assets.character.forEach((asset, index) => map.set(`@人物${index + 1}`, asset.id))
+  project.assets.image.forEach((asset, index) => map.set(`@图片${index + 1}`, asset.id))
+  project.assets.props.forEach((asset, index) => map.set(`@道具${index + 1}`, asset.id))
+
+  return map
+}
+
+function collectEpisodeAssetIds(project: Project | null, episodeId: string) {
+  const emptyResult = {
+    characterIds: [] as string[],
+    imageIds: [] as string[],
+    propIds: [] as string[],
+  }
+
+  if (!project) return emptyResult
+  const episode = project.episodes.find((item) => item.id === episodeId)
+  if (!episode) return emptyResult
+
+  const refs = {
+    characterIds: new Set(episode.assetRefs?.characterIds || []),
+    imageIds: new Set(episode.assetRefs?.imageIds || []),
+    propIds: new Set(episode.assetRefs?.propIds || []),
+  }
+
+  if (refs.characterIds.size === 0 && refs.imageIds.size === 0 && refs.propIds.size === 0) {
+    const tagToId = buildAssetTagToIdMap(project)
+    episode.shots?.forEach((shot) => {
+      const tags = ((shot.seedancePrompt || shot.action || "").match(/@(?:人物|图片|道具)\d+/g) || []) as string[]
+      tags.forEach((tag) => {
+        const assetId = tagToId.get(tag)
+        if (!assetId) return
+        if (tag.startsWith("@人物")) refs.characterIds.add(assetId)
+        if (tag.startsWith("@图片")) refs.imageIds.add(assetId)
+        if (tag.startsWith("@道具")) refs.propIds.add(assetId)
+      })
+    })
+  }
+
+  return {
+    characterIds: Array.from(refs.characterIds),
+    imageIds: Array.from(refs.imageIds),
+    propIds: Array.from(refs.propIds),
+  }
+}
+
 function AssetsPageInner() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -55,6 +143,8 @@ function AssetsPageInner() {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [isDevLogOpen, setIsDevLogOpen] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const [uploadTargetAssetId, setUploadTargetAssetId] = useState<string | null>(null)
 
   // 从 API 加载项目
   useEffect(() => {
@@ -84,19 +174,24 @@ function AssetsPageInner() {
     }
   }
 
-  // 保存项目
-  const handleSave = useCallback(async () => {
-    if (!project) return
+  // 保存项目到服务器
+  const saveProject = useCallback(async (projectData: Project) => {
     try {
-      await fetch(`/api/projects/${project.id}`, {
+      await fetch(`/api/projects/${projectData.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ project }),
+        body: JSON.stringify({ project: projectData }),
       })
     } catch (error) {
       console.error("保存失败:", error)
     }
-  }, [project])
+  }, [])
+
+  // 保存项目
+  const handleSave = useCallback(async () => {
+    if (!project) return
+    await saveProject(project)
+  }, [project, saveProject])
 
   // 自动保存（防抖）
   useEffect(() => {
@@ -110,6 +205,10 @@ function AssetsPageInner() {
   const [activeTab, setActiveTab] = useState<AssetTab>("all")
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedEpisodeId, setSelectedEpisodeId] = useState<string | null>(null)
+  const activeEpisode = useMemo(
+    () => project?.episodes.find((episode) => episode.id === selectedEpisodeId) || null,
+    [project, selectedEpisodeId]
+  )
 
   // 从 URL 参数初始化选中的分集
   useEffect(() => {
@@ -127,6 +226,11 @@ function AssetsPageInner() {
   const [editName, setEditName] = useState("")
   const [editDesc, setEditDesc] = useState("")
 
+  const handleGenerate = useCallback(() => {
+    if (!project || !activeEpisode) return
+    router.push(`/editor/shots?id=${project.id}&generating=true&episodeId=${activeEpisode.id}`)
+  }, [activeEpisode, project, router])
+
   // 开始编辑
   const handleStartEdit = (asset: Asset) => {
     setEditingAssetId(asset.id)
@@ -138,15 +242,13 @@ function AssetsPageInner() {
   const handleSaveEdit = async (asset: Asset) => {
     if (!project || !asset.type) return
 
-    const newProject = {
-      ...project,
-      assets: {
-        ...project.assets,
-        [asset.type]: project.assets[asset.type].map((a) =>
-          a.id === asset.id ? { ...a, name: editName, desc: editDesc } : a
-        ),
-      },
+    const nextAssets = {
+      ...project.assets,
+      [asset.type]: project.assets[asset.type].map((a) =>
+        a.id === asset.id ? { ...a, name: editName, desc: editDesc } : a
+      ),
     }
+    const newProject = withUpdatedAssets(project, nextAssets)
 
     setProject(newProject)
     setEditingAssetId(null)
@@ -184,18 +286,13 @@ function AssetsPageInner() {
   const episodeAssetCounts = useMemo(() => {
     if (!project) return []
     return project.episodes.map((ep) => {
-      // 从分镜中提取 @ 标签统计资产引用
-      const assetRefs = new Set<string>()
-      ep.shots?.forEach((shot) => {
-        // 从 seedancePrompt 和 action 中提取 @ 标签
-        const tags = (shot.seedancePrompt || shot.action || "").match(/@[^\s,，]+/g) || []
-        tags.forEach((tag) => assetRefs.add(tag))
-      })
+      const assetRefs = collectEpisodeAssetIds(project, ep.id)
+      const count = assetRefs.characterIds.length + assetRefs.imageIds.length + assetRefs.propIds.length
       return {
         id: ep.id,
         name: ep.name,
-        count: assetRefs.size,
-        assetRefs: Array.from(assetRefs), // 保存引用的资产标签列表
+        count,
+        assetRefs,
       }
     })
   }, [project?.episodes])
@@ -219,12 +316,12 @@ function AssetsPageInner() {
     if (selectedEpisodeId) {
       const episode = episodeAssetCounts.find((ep) => ep.id === selectedEpisodeId)
       if (!episode) return []
-
-      // 根据 assetRefs 匹配资产
-      return totalAssets.filter((asset) => {
-        const tag = getAssetTag(asset)
-        return episode.assetRefs.includes(tag)
-      })
+      const allowedIds = new Set([
+        ...episode.assetRefs.characterIds,
+        ...episode.assetRefs.imageIds,
+        ...episode.assetRefs.propIds,
+      ])
+      return totalAssets.filter((asset) => allowedIds.has(asset.id))
     }
 
     // 否则按 tab 过滤
@@ -259,8 +356,16 @@ function AssetsPageInner() {
   // 添加到总资产库
   const handleAddToLibrary = (asset: Asset) => {
     if (isInTotalLibrary(asset)) return
-    // TODO: 实现添加到总资产库逻辑
-    console.log("添加到总资产库:", asset)
+    if (!project || !asset.type) return
+
+    const nextAssets = {
+      ...project.assets,
+      [asset.type]: [...project.assets[asset.type], asset],
+    }
+    const newProject = withUpdatedAssets(project, nextAssets)
+
+    setProject(newProject)
+    void saveProject(newProject)
   }
 
   // 删除资产
@@ -273,10 +378,7 @@ function AssetsPageInner() {
       [asset.type]: project.assets[asset.type].filter((a) => a.id !== asset.id),
     }
 
-    const newProject = {
-      ...project,
-      assets: newAssets,
-    }
+    const newProject = withUpdatedAssets(project, newAssets)
 
     setProject(newProject)
 
@@ -292,18 +394,97 @@ function AssetsPageInner() {
     }
   }
 
-  // 保存项目到服务器
-  const saveProject = async (projectData: Project) => {
-    try {
-      await fetch(`/api/projects/${projectData.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ project: projectData }),
-      })
-    } catch (error) {
-      console.error("保存失败:", error)
+  const updateAsset = useCallback((assetId: string, assetType: AssetType, updater: (asset: Asset) => Asset) => {
+    setProject((currentProject) => {
+      if (!currentProject) return currentProject
+
+      const nextAssets = {
+        ...currentProject.assets,
+        [assetType]: currentProject.assets[assetType].map((asset) =>
+          asset.id === assetId ? updater(asset) : asset
+        ),
+      }
+      const nextProject = withUpdatedAssets(currentProject, nextAssets)
+      void saveProject(nextProject)
+      return nextProject
+    })
+  }, [saveProject])
+
+  const handleRemoveAssetImage = useCallback((asset: Asset) => {
+    if (!asset.type) return
+    updateAsset(asset.id, asset.type, (currentAsset) => ({
+      ...currentAsset,
+      url: undefined,
+      fileName: undefined,
+    }))
+  }, [updateAsset])
+
+  const handleUploadImageClick = useCallback((assetId: string) => {
+    setUploadTargetAssetId(assetId)
+    fileInputRef.current?.click()
+  }, [])
+
+  const handleFileChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    const assetId = uploadTargetAssetId
+
+    if (!file || !assetId || !project) {
+      event.target.value = ""
+      return
     }
-  }
+
+    const asset = totalAssets.find((item) => item.id === assetId)
+    if (!asset?.type) {
+      event.target.value = ""
+      return
+    }
+
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : ""
+      if (!result) return
+
+      updateAsset(asset.id, asset.type!, (currentAsset) => ({
+        ...currentAsset,
+        url: result,
+        fileName: file.name,
+      }))
+    }
+    reader.readAsDataURL(file)
+
+    event.target.value = ""
+    setUploadTargetAssetId(null)
+  }, [project, totalAssets, updateAsset, uploadTargetAssetId])
+
+  const handleAddAsset = useCallback(() => {
+    if (!project) return
+
+    const assetType: AssetType = activeTab === "character" || activeTab === "image" || activeTab === "props"
+      ? activeTab
+      : "character"
+    const nextIndex = project.assets[assetType].length + 1
+    const newAsset: Asset = {
+      id: `${assetType}_${Date.now()}`,
+      type: assetType,
+      name: `新${assetTypeLabels[assetType]}${nextIndex}`,
+      desc: "",
+    }
+
+    const nextAssets = {
+      ...project.assets,
+      [assetType]: [...project.assets[assetType], newAsset],
+    }
+    const nextProject = withUpdatedAssets(project, nextAssets)
+
+    setProject(nextProject)
+    setActiveTab(assetType)
+    setSelectedEpisodeId(null)
+    setEditingAssetId(newAsset.id)
+    setEditName(newAsset.name)
+    setEditDesc(newAsset.desc)
+    router.replace(`/editor/assets?id=${project.id}`)
+    void saveProject(nextProject)
+  }, [activeTab, project, router, saveProject])
 
   // 加载中状态
   if (isLoading) {
@@ -366,12 +547,30 @@ function AssetsPageInner() {
               <Film className="w-3.5 h-3.5" />
               分镜
             </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1.5 text-xs"
+              onClick={() => router.push(`/editor/prompts?id=${project.id}&episodeId=${episodeIdFromUrl || ''}`)}
+            >
+              <Code className="w-3.5 h-3.5" />
+              提示词
+            </Button>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" className="h-7 gap-1.5 text-xs">
+          <Button variant="outline" size="sm" className="h-7 gap-1.5 text-xs" onClick={handleSave}>
             <Save className="w-3.5 h-3.5" />
             保存
+          </Button>
+          <Button
+            size="sm"
+            className="h-7 gap-1.5 text-xs bg-amber-600 hover:bg-amber-700"
+            onClick={handleGenerate}
+            disabled={!activeEpisode?.plotInput.trim()}
+          >
+            <Video className="w-3.5 h-3.5" />
+            生成分镜
           </Button>
           <ThemeToggle />
           <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => router.push("/settings")}>
@@ -535,7 +734,7 @@ function AssetsPageInner() {
                   className="w-48 h-8 pl-8 text-xs"
                 />
               </div>
-              <Button size="sm" className="h-8 gap-1.5 text-xs bg-amber-600 hover:bg-amber-700">
+              <Button size="sm" className="h-8 gap-1.5 text-xs bg-amber-600 hover:bg-amber-700" onClick={handleAddAsset}>
                 <Plus className="w-3.5 h-3.5" />
                 添加资产
               </Button>
@@ -580,10 +779,7 @@ function AssetsPageInner() {
                               variant="destructive"
                               size="sm"
                               className="h-7 gap-1 text-xs"
-                              onClick={() => {
-                                // TODO: 移除图片
-                                console.log("移除图片:", asset.id)
-                              }}
+                              onClick={() => handleRemoveAssetImage(asset)}
                             >
                               <X className="w-3.5 h-3.5" />
                               移除
@@ -622,13 +818,11 @@ function AssetsPageInner() {
                             variant="ghost"
                             size="sm"
                             className="h-7 w-7 p-0"
-                            title="收藏入库"
-                            onClick={() => {
-                              // TODO: 收藏入库
-                              console.log("收藏入库:", asset.id)
-                            }}
+                            title={isInTotalLibrary(asset) ? "已在总资产库" : "收藏入库"}
+                            onClick={() => handleAddToLibrary(asset)}
+                            disabled={isInTotalLibrary(asset)}
                           >
-                            <Star className="w-4 h-4" />
+                            <Star className={`w-4 h-4 ${isInTotalLibrary(asset) ? "fill-amber-400 text-amber-400" : ""}`} />
                           </Button>
                           {/* 本地图片 */}
                           <Button
@@ -636,10 +830,7 @@ function AssetsPageInner() {
                             size="sm"
                             className="h-7 gap-1 text-xs"
                             title="上传本地图片"
-                            onClick={() => {
-                              // TODO: 上传本地图片
-                              console.log("上传本地图片:", asset.id)
-                            }}
+                            onClick={() => handleUploadImageClick(asset.id)}
                           >
                             <Upload className="w-3.5 h-3.5" />
                             本地图片
@@ -652,7 +843,7 @@ function AssetsPageInner() {
                             title="AI生成图片"
                             onClick={() => {
                               // TODO: AI生图
-                              console.log("AI生图:", asset.id)
+                              // AI生图功能尚未实现，当前仅保留占位入口
                             }}
                           >
                             <Sparkles className="w-3.5 h-3.5" />
@@ -665,10 +856,7 @@ function AssetsPageInner() {
                               size="sm"
                               className="h-7 gap-1 text-xs text-destructive hover:text-destructive"
                               title="移除图片"
-                              onClick={() => {
-                                // TODO: 移除图片
-                                console.log("移除图片:", asset.id)
-                              }}
+                              onClick={() => handleRemoveAssetImage(asset)}
                             >
                               <X className="w-3.5 h-3.5" />
                               移除
@@ -773,6 +961,13 @@ function AssetsPageInner() {
       </div>
 
       {/* 开发日志 */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={handleFileChange}
+      />
       <DevLogToggle onClick={() => setIsDevLogOpen(true)} />
       <DevLogPanel isOpen={isDevLogOpen} onClose={() => setIsDevLogOpen(false)} />
     </div>

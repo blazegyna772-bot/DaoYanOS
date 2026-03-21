@@ -14,17 +14,12 @@ import {
   ExternalLink,
   Bot,
   Eye,
-  ChevronRight,
   AlertCircle,
   TestTube,
-  FileText,
-  RefreshCw,
-  Code,
 } from "lucide-react"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
@@ -55,20 +50,6 @@ import {
 } from "@/lib/platforms"
 import type { PlatformConfig } from "@/types"
 
-// 提示词文件中文描述映射
-const PROMPT_FILE_DESCRIPTIONS: Record<string, string> = {
-  "directors.yaml": "39位导演数据（风格/技法/光影）",
-  "categoryGuides.yaml": "5种分类人格（叙事/意境/悬疑/动漫/自由）",
-  "shotRules.yaml": "五维铁律、表格格式",
-  "durationRules.yaml": "时长路由规则（burst/mini/full）",
-  "faithfulMode.yaml": "保真模式约束",
-  "visualStyles.yaml": "18种视觉风格",
-  "shotEdit.yaml": "单镜修改提示词",
-  "platforms.yaml": "10个AI平台配置",
-  "safetyFilter.yaml": "敏感词过滤配置（替换词表+四区禁词）",
-  "scene_generation.yaml": "场景生成模板",
-}
-
 export default function SettingsPage() {
   const router = useRouter()
   const [activeTab, setActiveTab] = useState("platform")
@@ -76,6 +57,7 @@ export default function SettingsPage() {
   const [selectedPlatformId, setSelectedPlatformId] = useState<string>("openai")
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle")
   const [testStatus, setTestStatus] = useState<Record<string, "idle" | "testing" | "success" | "error">>({})
+  const [testMessages, setTestMessages] = useState<Record<string, string>>({})
 
   // 平台配置状态
   const [platformConfigs, setPlatformConfigs] = useState<Record<string, PlatformConfig>>(() => {
@@ -121,17 +103,6 @@ export default function SettingsPage() {
     fontSize: 16,
   })
 
-  // 提示词设置
-  const [prompts, setPrompts] = useState<Record<string, string>>({})
-  const [selectedPromptFile, setSelectedPromptFile] = useState<string>("")
-  const [promptContent, setPromptContent] = useState<string>("")
-  const [isLoadingPrompts, setIsLoadingPrompts] = useState(false)
-  const [isSavingPrompt, setIsSavingPrompt] = useState(false)
-
-  // 提示词编辑保护
-  const [promptEditEnabled, setPromptEditEnabled] = useState(false)
-  const [defaultPrompts, setDefaultPrompts] = useState<Record<string, string>>({})
-
   // 全局字体大小
   const handleFontSizeChange = (size: number) => {
     setUiSettings((s) => ({ ...s, fontSize: size }))
@@ -169,25 +140,47 @@ export default function SettingsPage() {
   const testConnection = async (platformId: string, type: "text" | "vision") => {
     const config = platformConfigs[platformId]
     const key = type === "text" ? config.textApiKey : config.visionApiKey
+    const endpoint = type === "text" ? config.textEndpoint : config.visionEndpoint
+    const model = type === "text" ? config.textModel : config.visionModel
+    const statusKey = `${platformId}_${type}`
 
-    if (!key) {
-      setTestStatus((prev) => ({ ...prev, [`${platformId}_${type}`]: "error" }))
+    if (!key || !endpoint || !model) {
+      setTestStatus((prev) => ({ ...prev, [statusKey]: "error" }))
+      setTestMessages((prev) => ({
+        ...prev,
+        [statusKey]: "请先填写 API Key、模型和端点",
+      }))
       return
     }
 
-    setTestStatus((prev) => ({ ...prev, [`${platformId}_${type}`]: "testing" }))
+    setTestStatus((prev) => ({ ...prev, [statusKey]: "testing" }))
+    setTestMessages((prev) => ({ ...prev, [statusKey]: "" }))
 
-    // 模拟测试延迟
-    await new Promise((resolve) => setTimeout(resolve, 1500))
+    try {
+      const response = await fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ config, type }),
+      })
 
-    // 实际项目中这里应该调用真实的 API 测试
-    // 现在只是模拟成功
-    setTestStatus((prev) => ({ ...prev, [`${platformId}_${type}`]: "success" }))
+      const result = await response.json()
+      const isSuccess = response.ok && result.success
 
-    // 3秒后重置状态
-    setTimeout(() => {
-      setTestStatus((prev) => ({ ...prev, [`${platformId}_${type}`]: "idle" }))
-    }, 3000)
+      setTestStatus((prev) => ({
+        ...prev,
+        [statusKey]: isSuccess ? "success" : "error",
+      }))
+      setTestMessages((prev) => ({
+        ...prev,
+        [statusKey]: result.message || result.detail || result.error || (isSuccess ? "连接成功" : "连接失败"),
+      }))
+    } catch (error) {
+      setTestStatus((prev) => ({ ...prev, [statusKey]: "error" }))
+      setTestMessages((prev) => ({
+        ...prev,
+        [statusKey]: (error as Error).message || "连接失败",
+      }))
+    }
   }
 
   // 保存设置
@@ -262,79 +255,6 @@ export default function SettingsPage() {
     }
   }
 
-  // 加载提示词
-  const loadPrompts = async () => {
-    setIsLoadingPrompts(true)
-    try {
-      const response = await fetch("/api/prompts")
-      if (response.ok) {
-        const data = await response.json()
-        setPrompts(data.prompts)
-        const files = Object.keys(data.prompts)
-        if (files.length > 0 && !selectedPromptFile) {
-          setSelectedPromptFile(files[0])
-          setPromptContent(data.prompts[files[0]])
-        }
-      }
-    } catch (error) {
-      console.error("Failed to load prompts:", error)
-    } finally {
-      setIsLoadingPrompts(false)
-    }
-  }
-
-  // 保存提示词
-  const savePrompt = async () => {
-    if (!selectedPromptFile || !promptContent) return
-    setIsSavingPrompt(true)
-    try {
-      const response = await fetch("/api/prompts", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          filename: selectedPromptFile,
-          content: promptContent,
-        }),
-      })
-      if (response.ok) {
-        setPrompts((prev) => ({ ...prev, [selectedPromptFile]: promptContent }))
-        alert("提示词已保存")
-      } else {
-        const error = await response.json()
-        alert(`保存失败: ${error.error}`)
-      }
-    } catch (error) {
-      alert(`保存失败: ${(error as Error).message}`)
-    } finally {
-      setIsSavingPrompt(false)
-    }
-  }
-
-  // 重新加载提示词
-  const reloadPrompts = async () => {
-    try {
-      await fetch("/api/prompts", { method: "POST" })
-      await loadPrompts()
-      alert("提示词已重新加载")
-    } catch (error) {
-      alert(`重新加载失败: ${(error as Error).message}`)
-    }
-  }
-
-  // 当选择文件变化时更新内容
-  useEffect(() => {
-    if (selectedPromptFile && prompts[selectedPromptFile]) {
-      setPromptContent(prompts[selectedPromptFile])
-    }
-  }, [selectedPromptFile, prompts])
-
-  // 加载提示词（仅在prompts tab被访问时）
-  useEffect(() => {
-    if (activeTab === "prompts" && Object.keys(prompts).length === 0) {
-      loadPrompts()
-    }
-  }, [activeTab, prompts])
-
   // 加载设置
   useEffect(() => {
     // 从服务器加载全局配置
@@ -354,6 +274,8 @@ export default function SettingsPage() {
 
   const currentConfig = platformConfigs[selectedPlatformId]
   const currentDef = getPlatformDefinition(selectedPlatformId)
+  const currentTestKey = currentConfig ? `${currentConfig.id}_${platformTab}` : ""
+  const currentTestMessage = currentTestKey ? testMessages[currentTestKey] : ""
 
   return (
     <div className="min-h-screen bg-background">
@@ -400,14 +322,10 @@ export default function SettingsPage() {
       {/* 主内容 */}
       <div className="container mx-auto max-w-6xl py-8 px-6">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="grid w-full grid-cols-5 max-w-2xl">
+          <TabsList className="grid w-full grid-cols-3 max-w-2xl">
             <TabsTrigger value="platform" className="gap-2">
               <Key className="w-4 h-4" />
               AI平台
-            </TabsTrigger>
-            <TabsTrigger value="prompts" className="gap-2">
-              <FileText className="w-4 h-4" />
-              提示词
             </TabsTrigger>
             <TabsTrigger value="storage" className="gap-2">
               <Database className="w-4 h-4" />
@@ -589,6 +507,19 @@ export default function SettingsPage() {
                             )}
                           </Button>
                         </div>
+                        {currentTestMessage && (
+                          <p
+                            className={`text-xs ${
+                              testStatus[currentTestKey] === "success"
+                                ? "text-emerald-600"
+                                : testStatus[currentTestKey] === "error"
+                                  ? "text-destructive"
+                                  : "text-muted-foreground"
+                            }`}
+                          >
+                            {currentTestMessage}
+                          </p>
+                        )}
                       </div>
 
                       {/* 模型选择 */}
@@ -674,152 +605,6 @@ export default function SettingsPage() {
                 平台配置仅保存在本地浏览器中。如需跨设备同步，请手动导出备份。
                 <br />
                 视觉分析用于图片反推功能，如果不需要可以不配置。
-              </AlertDescription>
-            </Alert>
-          </TabsContent>
-
-          {/* 提示词设置 */}
-          <TabsContent value="prompts" className="space-y-6">
-            <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-              {/* 文件列表 */}
-              <Card className="lg:col-span-1">
-                <CardHeader>
-                  <CardTitle className="text-base flex items-center justify-between">
-                    <span>提示词文件</span>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6"
-                      onClick={reloadPrompts}
-                    >
-                      <RefreshCw className="w-4 h-4" />
-                    </Button>
-                  </CardTitle>
-                  <CardDescription>选择要编辑的提示词模板</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-2">
-                  <ScrollArea className="h-[400px]">
-                    {isLoadingPrompts ? (
-                      <div className="flex items-center justify-center py-8">
-                        <div className="w-6 h-6 border-2 border-current border-t-transparent rounded-full animate-spin" />
-                      </div>
-                    ) : (
-                      Object.keys(prompts).map((file) => (
-                        <div
-                          key={file}
-                          onClick={() => {
-                            setSelectedPromptFile(file)
-                            setPromptContent(prompts[file])
-                          }}
-                          className={`p-3 rounded-lg cursor-pointer transition-all ${
-                            selectedPromptFile === file
-                              ? "bg-amber-500/10 border border-amber-500/30"
-                              : "hover:bg-muted border border-transparent"
-                          }`}
-                        >
-                          <div className="flex items-center gap-2">
-                            <Code className="w-4 h-4 text-muted-foreground shrink-0" />
-                            <span className="text-sm font-medium">{file}</span>
-                          </div>
-                          <p className="text-xs text-muted-foreground mt-1 ml-6">
-                            {PROMPT_FILE_DESCRIPTIONS[file] || "提示词配置"}
-                          </p>
-                        </div>
-                      ))
-                    )}
-                  </ScrollArea>
-                </CardContent>
-              </Card>
-
-              {/* 编辑器 */}
-              <Card className="lg:col-span-3">
-                <CardHeader>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <CardTitle className="text-base">
-                        {selectedPromptFile || "选择文件"}
-                      </CardTitle>
-                      <CardDescription>
-                        编辑YAML格式的提示词模板
-                      </CardDescription>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        onClick={savePrompt}
-                        disabled={!selectedPromptFile || isSavingPrompt || !promptEditEnabled}
-                        className="gap-2"
-                      >
-                        {isSavingPrompt ? (
-                          <>
-                            <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
-                            保存中...
-                          </>
-                        ) : (
-                          <>
-                            <Save className="w-4 h-4" />
-                            保存修改
-                          </>
-                        )}
-                      </Button>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  {/* 编辑保护开关 */}
-                  <div className="flex items-center justify-between mb-3 p-3 rounded-lg bg-muted/50">
-                    <div className="flex items-center gap-2">
-                      <Switch
-                        checked={promptEditEnabled}
-                        onCheckedChange={setPromptEditEnabled}
-                      />
-                      <Label className="text-sm">启用编辑模式</Label>
-                    </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="gap-1.5 text-xs"
-                      disabled={!selectedPromptFile}
-                      onClick={async () => {
-                        if (!selectedPromptFile) return
-                        if (confirm("确定要重置此提示词文件到默认状态吗？")) {
-                          try {
-                            // 重新从文件系统加载
-                            const response = await fetch("/api/prompts")
-                            if (response.ok) {
-                              const data = await response.json()
-                              if (data.prompts[selectedPromptFile]) {
-                                setPromptContent(data.prompts[selectedPromptFile])
-                                alert("已重置到默认内容")
-                              }
-                            }
-                          } catch (error) {
-                            alert("重置失败")
-                          }
-                        }
-                      }}
-                    >
-                      <RefreshCw className="w-3.5 h-3.5" />
-                      重置默认
-                    </Button>
-                  </div>
-
-                  <Textarea
-                    value={promptContent}
-                    onChange={(e) => setPromptContent(e.target.value)}
-                    placeholder="选择左侧文件查看或编辑提示词..."
-                    className="h-[400px] font-mono text-xs"
-                    disabled={!promptEditEnabled}
-                  />
-                </CardContent>
-              </Card>
-            </div>
-
-            <Alert className="bg-muted">
-              <AlertCircle className="w-4 h-4" />
-              <AlertDescription className="text-xs">
-                ⚠️ <strong>提示词编辑需要先开启"启用编辑模式"开关</strong>，修改后点击保存生效。
-                <br />
-                提示词文件使用YAML格式，错误的格式可能导致生成失败。如需恢复，点击"重置默认"。
               </AlertDescription>
             </Alert>
           </TabsContent>

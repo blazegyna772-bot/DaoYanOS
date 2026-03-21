@@ -4,7 +4,7 @@
  * 运行时零 I/O 开销（启动时加载到内存）
  */
 
-import type { Director, AssetState, BridgeState, PlatformConfig } from "@/types"
+import type { Director, AssetState, BridgeState, PlatformConfig, Scene } from "@/types"
 import { getPromptConfig, type CategoryGuide } from "./promptLoader"
 
 // ============================================
@@ -25,6 +25,57 @@ export interface PromptBuilderOptions {
   customShotCount?: number
   enableBGM?: boolean
   enableSubtitle?: boolean
+}
+
+interface ResolvedAssetMapping {
+  originalName: string
+  tag: string
+  desc: string
+  type: "character" | "image" | "props" | "unknown"
+}
+
+function fillTemplate(template: string, variables: Record<string, string | number | null | undefined>): string {
+  let result = template
+
+  for (const [key, rawValue] of Object.entries(variables)) {
+    const value = rawValue == null ? "" : String(rawValue)
+    result = result.replace(new RegExp(`\\{${key}\\}`, "g"), value)
+  }
+
+  return result
+    .replace(/\{\{/g, "{")
+    .replace(/\}\}/g, "}")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+}
+
+function clipAssetDescription(desc: string, limit = 50): string {
+  const trimmed = desc.trim()
+  if (!trimmed) return "无补充描述"
+  return trimmed.slice(0, limit) + (trimmed.length > limit ? "…" : "")
+}
+
+const SPEAKER_DIALOGUE_LINE_RE = /^[A-Za-z\u4E00-\u9FFF][A-Za-z0-9\u4E00-\u9FFF·（）()]{0,15}[：:]\s*\S+/
+
+function normalizeDialogueCandidate(line: string): string {
+  return line
+    .trim()
+    .replace(/^[-*•·]+\s*/, "")
+    .replace(/^\d+[\.\-、]\s*/, "")
+    .replace(/^[①②③④⑤⑥⑦⑧⑨⑩]\s*/, "")
+}
+
+function extractDialogueLines(text: string): string[] {
+  if (!text.trim()) return []
+
+  const candidates = text.includes("台词原文：")
+    ? text.split("台词原文：").slice(1).join("台词原文：").split(/\s*\/\s*|\r?\n/)
+    : text.split(/\s*\/\s*|\r?\n/)
+
+  return candidates
+    .map(normalizeDialogueCandidate)
+    .filter((line) => !line.includes("1:1"))
+    .filter((line) => SPEAKER_DIALOGUE_LINE_RE.test(line))
 }
 
 // ============================================
@@ -87,23 +138,28 @@ export function buildDirectorStyleBlock(director: Director | null): string {
 
   // 动漫导演使用 donghuaProfile
   if (director.category === "anime" && director.donghuaProfile) {
-    return `【导演风格：${director.name}（资深动画监督）】
-▶ 人物造型：${director.donghuaProfile.charStyle}
-▶ 世界观美学：${director.donghuaProfile.worldStyle}
-▶ 特效表现：${director.donghuaProfile.vfxStyle}`
+    return fillTemplate(config.systemPrompts.directorStyleAnime, {
+      directorName: director.name,
+      charStyle: director.donghuaProfile.charStyle,
+      worldStyle: director.donghuaProfile.worldStyle,
+      vfxStyle: director.donghuaProfile.vfxStyle,
+    })
   }
 
   // 普通导演
-  return `【导演风格：${director.name}】
-▶ 风格特征：${director.style}
-▶ 运镜手法：${(director.techniques || []).join("、")}
-▶ 光影风格：${director.lighting || ""}`
+  return fillTemplate(config.systemPrompts.directorStyleStandard, {
+    directorName: director.name,
+    directorStyle: director.style,
+    directorTechniques: (director.techniques || []).join("、"),
+    directorLighting: director.lighting || "",
+  })
 }
 
 /**
  * 构建资产库信息块
  */
 export function buildAssetLibraryBlock(assets: AssetState): string {
+  const config = getPromptConfig()
   const { character, image, props, assetTagEnabled } = assets
   const hasAnyAsset = character.length > 0 || image.length > 0 || props.length > 0
 
@@ -111,39 +167,117 @@ export function buildAssetLibraryBlock(assets: AssetState): string {
     return ""
   }
 
-  let block = "【已注册资产清单（@标签模式）】：\n"
+  const sections: string[] = [config.systemPrompts.assetLibraryHeader]
 
   // 角色资产
   if (character.length > 0 && assetTagEnabled.character) {
-    block += "\n【角色资产】：\n"
-    character.forEach((asset, index) => {
-      block += `  · @人物${index + 1}（${asset.name}）：${asset.desc.slice(0, 50)}${asset.desc.length > 50 ? "…" : ""}\n`
-    })
+    sections.push(config.systemPrompts.assetLibraryCharacterSection)
+    sections.push(
+      character.map((asset, index) =>
+        fillTemplate(config.systemPrompts.assetLibraryCharacterLine, {
+          index: index + 1,
+          name: asset.name,
+          desc: clipAssetDescription(asset.desc),
+        })
+      ).join("\n")
+    )
   }
 
   // 场景资产
   if (image.length > 0 && assetTagEnabled.image) {
-    block += "\n【场景资产】：\n"
-    image.forEach((asset, index) => {
-      block += `  · @图片${index + 1}（${asset.name}）：${asset.desc.slice(0, 50)}${asset.desc.length > 50 ? "…" : ""}\n`
-    })
+    sections.push(config.systemPrompts.assetLibraryImageSection)
+    sections.push(
+      image.map((asset, index) =>
+        fillTemplate(config.systemPrompts.assetLibraryImageLine, {
+          index: index + 1,
+          name: asset.name,
+          desc: clipAssetDescription(asset.desc),
+        })
+      ).join("\n")
+    )
   }
 
   // 道具资产
   if (props.length > 0 && assetTagEnabled.props) {
-    block += "\n【道具资产】：\n"
-    props.forEach((asset, index) => {
-      block += `  · @道具${index + 1}（${asset.name}）：${asset.desc.slice(0, 50)}${asset.desc.length > 50 ? "…" : ""}\n`
-    })
+    sections.push(config.systemPrompts.assetLibraryPropSection)
+    sections.push(
+      props.map((asset, index) =>
+        fillTemplate(config.systemPrompts.assetLibraryPropLine, {
+          index: index + 1,
+          name: asset.name,
+          desc: clipAssetDescription(asset.desc),
+        })
+      ).join("\n")
+    )
   }
 
-  return block
+  return sections.filter(Boolean).join("\n\n")
+}
+
+function hasAnyEnabledTagAsset(assets: AssetState): boolean {
+  return (
+    (assets.assetTagEnabled.character && assets.character.length > 0) ||
+    (assets.assetTagEnabled.image && assets.image.length > 0) ||
+    (assets.assetTagEnabled.props && assets.props.length > 0)
+  )
+}
+
+function resolveAssetMapping(assets: AssetState): ResolvedAssetMapping[] {
+  return Object.entries(assets.assetNameMap)
+    .map(([originalName, tag]) => {
+      if (tag.startsWith("@人物")) {
+        const index = Number.parseInt(tag.replace("@人物", ""), 10) - 1
+        const asset = assets.character[index]
+        return {
+          originalName,
+          tag,
+          desc: asset?.desc?.trim() || "",
+          type: "character" as const,
+        }
+      }
+
+      if (tag.startsWith("@图片")) {
+        const index = Number.parseInt(tag.replace("@图片", ""), 10) - 1
+        const asset = assets.image[index]
+        return {
+          originalName,
+          tag,
+          desc: asset?.desc?.trim() || "",
+          type: "image" as const,
+        }
+      }
+
+      if (tag.startsWith("@道具")) {
+        const index = Number.parseInt(tag.replace("@道具", ""), 10) - 1
+        const asset = assets.props[index]
+        return {
+          originalName,
+          tag,
+          desc: asset?.desc?.trim() || "",
+          type: "props" as const,
+        }
+      }
+
+      return {
+        originalName,
+        tag,
+        desc: "",
+        type: "unknown" as const,
+      }
+    })
+    .filter((entry) => {
+      if (entry.type === "character") return assets.assetTagEnabled.character
+      if (entry.type === "image") return assets.assetTagEnabled.image
+      if (entry.type === "props") return assets.assetTagEnabled.props
+      return true
+    })
 }
 
 /**
  * 构建资产标签调用规则
  */
 export function buildAssetCallRule(assets: AssetState): string {
+  const config = getPromptConfig()
   const { character, image, props, assetTagEnabled } = assets
   const hasTags =
     (character.length > 0 && assetTagEnabled.character) ||
@@ -154,60 +288,136 @@ export function buildAssetCallRule(assets: AssetState): string {
     return ""
   }
 
-  let rule = "【资产标签调用准则】：\n"
+  const lines: string[] = [config.systemPrompts.assetCallRuleHeader]
 
   if (character.length > 0 && assetTagEnabled.character) {
     const tags = character.map((_, i) => `@人物${i + 1}`).join("、")
-    rule += `  · 每个出现已注册角色的镜头 → [主体] 字段必须使用 ${tags} 等标签\n`
+    lines.push(fillTemplate(config.systemPrompts.assetCallRuleCharacter, { tags }))
   }
 
   if (image.length > 0 && assetTagEnabled.image) {
     const tags = image.map((_, i) => `@图片${i + 1}`).join("、")
-    rule += `  · 场景与已注册环境匹配时 → [主体] 字段追加 ${tags} 等标签\n`
+    lines.push(fillTemplate(config.systemPrompts.assetCallRuleImage, { tags }))
   }
 
   if (props.length > 0 && assetTagEnabled.props) {
     const tags = props.map((_, i) => `@道具${i + 1}`).join("、")
-    rule += `  · 涉及已注册道具时 → 【角色分动】字段必须使用 ${tags} 等标签\n`
+    lines.push(fillTemplate(config.systemPrompts.assetCallRuleProp, { tags }))
   }
 
-  rule += "  · @标签后可追加该镜特有的动态细节（动作、表情、光影），但不得覆盖或矛盾于资产定义的基础外貌。"
+  lines.push(config.systemPrompts.assetCallRuleFooter)
 
-  return rule
+  return lines.filter(Boolean).join("\n")
+}
+
+export function buildNameMappingInstruction(assets: AssetState): string {
+  const config = getPromptConfig()
+  const mappings = resolveAssetMapping(assets)
+
+  if (mappings.length === 0 || !hasAnyEnabledTagAsset(assets)) {
+    return ""
+  }
+
+  const [header, lineTemplate, footer] = config.nameMappingFormat.split("\n").filter(Boolean)
+  const lines = mappings.map((entry) =>
+    fillTemplate(lineTemplate || config.systemPrompts.faithfulHeaderMappingLine, {
+      原名: entry.originalName,
+      标签: entry.tag,
+      描述: entry.desc || "无补充描述",
+      originalName: entry.originalName,
+      tag: entry.tag,
+      descSuffix: entry.desc ? ` ｜${entry.desc}` : "",
+    })
+  )
+
+  return [header, ...lines, footer].filter(Boolean).join("\n")
+}
+
+export function buildPropConsistencyBlock(assets: AssetState): string {
+  const config = getPromptConfig()
+
+  if (!assets.assetTagEnabled.props || assets.props.length === 0 || !config.propConsistencyRule) {
+    return ""
+  }
+
+  const propLines = assets.props
+    .map((asset, index) => {
+      if (!asset.desc.trim()) return ""
+      return `· @道具${index + 1}（${asset.desc.trim()}）`
+    })
+    .filter(Boolean)
+    .join("\n")
+
+  if (!propLines) {
+    return ""
+  }
+
+  return config.propConsistencyRule
+    .replace("· {标签}（{描述}）", propLines)
 }
 
 /**
  * 构建保真模式约束块
  */
-export function buildFaithfulBlock(
+export function isFaithfulActive(
+  isFaithfulMode: boolean,
+  isScriptImported: boolean
+): boolean {
+  return isFaithfulMode || isScriptImported
+}
+
+export function buildFaithfulHeader(
   isFaithfulMode: boolean,
   isScriptImported: boolean,
   assets: AssetState
 ): string {
-  const faithfulActive = isFaithfulMode || isScriptImported
-
-  if (!faithfulActive) {
+  if (!isFaithfulActive(isFaithfulMode, isScriptImported)) {
     return ""
   }
 
-  const hasTags =
-    assets.character.some((_, i) => assets.assetTagEnabled.character) ||
-    assets.image.some((_, i) => assets.assetTagEnabled.image) ||
-    assets.props.some((_, i) => assets.assetTagEnabled.props)
+  const config = getPromptConfig()
+  const mappingLines = resolveAssetMapping(assets).map((entry) =>
+    fillTemplate(config.systemPrompts.faithfulHeaderMappingLine, {
+      originalName: entry.originalName,
+      tag: entry.tag,
+      descSuffix: entry.desc ? ` ｜${entry.desc}` : "",
+    })
+  )
 
-  let block = `
-🔒【保真直通模式（最高优先级指令）】：
-- 当前剧本为导演终稿，严禁增删任何情节、人物或台词
-- 你的唯一任务是将原始剧本内容 1:1 视觉化
-- 禁止调用任何扩写/润色/戏剧节拍重构逻辑`
+  const mappingBlock = mappingLines.length > 0
+    ? `\n${fillTemplate(config.systemPrompts.faithfulHeaderMappingBlock, {
+        mappingLines: mappingLines.join("\n"),
+      })}\n`
+    : "\n"
 
-  if (hasTags) {
-    block += "\n- 已开启@标签模式的素材类别，标签必须优先于任何外貌描写"
-  } else {
-    block += "\n- 所有资产均使用文字描述模式，禁止在提示词中出现任何@人物/@图片/@道具标签"
+  return `${config.faithfulHeader.trimEnd()}${mappingBlock}`
+}
+
+export function buildEffectivePlotForGenerate(
+  plot: string,
+  isFaithfulMode: boolean,
+  isScriptImported: boolean,
+  assets: AssetState
+): string {
+  const faithfulHeader = buildFaithfulHeader(isFaithfulMode, isScriptImported, assets)
+  return faithfulHeader ? `${faithfulHeader}${plot}` : plot
+}
+
+export function buildFaithfulSuffix(
+  isFaithfulMode: boolean,
+  isScriptImported: boolean,
+  assets: AssetState
+): string {
+  if (!isFaithfulActive(isFaithfulMode, isScriptImported)) {
+    return ""
   }
 
-  return block
+  const config = getPromptConfig()
+  const hasTags = hasAnyEnabledTagAsset(assets)
+
+  return hasTags
+    ? `${config.faithfulSuffix.trimEnd()}\n${config.systemPrompts.faithfulSuffixTagPriority}`
+    : `${config.faithfulSuffix.trimEnd()}\n${config.systemPrompts.faithfulSuffixTextOnly}`
 }
 
 /**
@@ -240,10 +450,16 @@ export function buildFiveDimensionRules(): string {
 
   const rules = config.fiveDimensionRules.map((rule, index) => {
     const emoji = ["❶", "❷", "❸", "❹", "❺"][index] || `${index + 1}.`
-    return `${emoji} ${rule.name}：${rule.rule}`
+    return fillTemplate(config.systemPrompts.fiveDimensionRuleLine, {
+      emoji,
+      ruleName: rule.name,
+      ruleText: rule.rule,
+    })
   }).join("\n   ")
 
-  return `【五维铁律（每镜必须遵守）】：\n   ${rules}`
+  return fillTemplate(config.systemPrompts.fiveDimensionRuleBlock, {
+    ruleLines: rules,
+  })
 }
 
 /**
@@ -267,7 +483,9 @@ export function buildSeedanceFormat(enableBGM: boolean, enableSubtitle: boolean)
     const restrictions = []
     if (!enableBGM) restrictions.push("禁BGM")
     if (!enableSubtitle) restrictions.push("禁字幕")
-    template += ` 拍摄指令：[${restrictions.join(" ")}]`
+    template += ` ${fillTemplate(config.systemPrompts.seedanceDisabledInstructions, {
+      restrictions: restrictions.join(" "),
+    })}`
   }
 
   return template
@@ -284,37 +502,22 @@ function buildNarrativeScaleBlock(
   const config = getPromptConfig()
 
   if (!isSTCEnabled) {
-    return `【直接视觉化模式（叙事结构构建已关闭）】：
-- 你的唯一任务是将剧本内容转化为画面，不添加、不改变、不重构任何情节
-- 按剧本的自然顺序逐段视觉化，镜头时长由画面内容决定
-- 不需要"冲突障碍"、"情绪转折"、"节拍任务"等叙事逻辑`
+    return config.systemPrompts.narrativeScaleDirectVisualization
   }
 
   if (narrativeMode === "burst") {
     const burstConfig = config.routing.burst
-    return `⚡ 极速瞬间模式（≤${burstConfig.maxDuration}s）：捕捉一个极具张力的瞬间
-${burstConfig.rules.map(r => `- ${r}`).join("\n")}`
+    return fillTemplate(config.systemPrompts.narrativeScaleBurst, {
+      burstMaxDuration: burstConfig.maxDuration || 25,
+      burstRules: burstConfig.rules.map((rule) => `- ${rule}`).join("\n"),
+    })
   }
 
   if (isAtmosphere) {
-    return `【叙事规模（情绪意境模式）】：
-- 这是一个氛围/意境短片，禁止强行套入冲突结构。
-- 节奏：起（建立情绪锚点）→ 承（深化意象）→ 转（情绪偏移）→ 合（收束留余韵）。
-
-【情绪意象规则（禁止强行寻找冲突障碍）】：
-▶ 聚焦视觉意象的延展：每一镜延伸或变奏上一镜的核心意象（光线、材质、空间、色彩温度）
-▶ "戏剧张力"列只需标注情绪细微偏移，禁止填写冲突障碍格式`
+    return config.systemPrompts.narrativeScaleAtmosphere
   }
 
-  // mini/full 模式的 STC 规则
-  return `【叙事规模（迷你弧线模式）】：
-- 这是一个迷你故事，重点在于情境设置和一个小反转。
-- 结构：开场铺垫→变故发生→冒险展开→峰回路转→终章闭环。
-
-【场景动力学规则（每一镜必须遵守）】：
-▶ +/- 情绪转折：每一镜结束时情绪张力必须发生方向性转变。
-▶ >< 冲突标注：每一镜必须暗示或明示阻碍主角的障碍。
-▶ 泳池里的教皇：交代背景信息时必须加入娱乐性视觉背景细节。`
+  return config.systemPrompts.narrativeScaleMini
 }
 
 /**
@@ -347,8 +550,13 @@ export function buildFullSystemPrompt(options: PromptBuilderOptions): string {
   const directorStyle = buildDirectorStyleBlock(director)
   const assetLibrary = buildAssetLibraryBlock(assets)
   const assetCallRule = buildAssetCallRule(assets)
-  const faithfulBlock = buildFaithfulBlock(isFaithfulMode, isScriptImported, assets)
+  const nameMappingInstruction = buildNameMappingInstruction(assets)
+  const propConsistencyRule = buildPropConsistencyBlock(assets)
+  const faithfulBlock = buildFaithfulSuffix(isFaithfulMode, isScriptImported, assets)
   const fiveDimensionRules = buildFiveDimensionRules()
+  const assetTagInstruction = hasAnyEnabledTagAsset(assets)
+    ? getPromptConfig().assetTagInstruction
+    : ""
 
   // 3. 计算镜头数量
   let shotCountText: string
@@ -356,7 +564,9 @@ export function buildFullSystemPrompt(options: PromptBuilderOptions): string {
 
   if (shotMode === "custom" && customShotCount) {
     shotCountText = `恰好 ${customShotCount} 镜`
-    shotCountLock = `\n【绝对指令 — 镜数锁定】：你必须且只能生成恰好 ${customShotCount} 个分镜，不得多于或少于 ${customShotCount} 镜。`
+    shotCountLock = `\n${fillTemplate(config.systemPrompts.fullShotCountLock, {
+      customShotCount,
+    })}`
   } else {
     const { min, max } = calcShotCountRange(duration)
     shotCountText = min === max ? `${min} 镜` : `${min}–${max} 镜`
@@ -370,84 +580,70 @@ export function buildFullSystemPrompt(options: PromptBuilderOptions): string {
   // 5. 选择表格格式
   const tableHeader = isSTCEnabled ? config.tableFormat.withSTC : config.tableFormat.withoutSTC
 
-  // 6. 组装完整提示词
-  const systemPrompt = `你是DaoYanOS首席导演与分镜师。
-${directorStyle}
-
-${assetLibrary}
-
-${assetCallRule}
-
-【时长与节奏掌控】：
-- 总时长严格限制为：${duration} 秒，累计时间轴必须刚好等于 ${duration}s。
-- 分镜数量：${shotCountText}，根据剧本节奏自行决定。${shotCountLock}
-- 每镜时长：动作/紧张镜头 2–5s，叙事/对话镜头 5–10s。禁止所有镜头时长相同。
-
-${narrativeScaleBlock}
-
-【分镜生成规则（五维视听叙事）】：
-1. 输出标准Markdown表格：${tableHeader}
-2. 所有内容使用中文。
-3. 「SEEDANCE提示词」列规范（每个镜头写成一行，不换行，按此顺序）：
-   ${buildSeedanceFormat(enableBGM, enableSubtitle)}
-4. 「画面描述」列：用自然语言写人类可读的画面描述，严禁出现任何 @标签。
-5. 「光影氛围」列：简短描述本镜整体光影色调。
-6. 视觉基调：深度体现"${visualStyleDesc}"的视觉风格特征。
-7. 严禁在 SEEDANCE提示词列 输出 --ar、--motion、--quality 等技术参数。
-8. 严禁出现任何明星、名人姓名或版权角色名。
-9. ⚠️${fiveDimensionRules}
-
-${faithfulBlock}
-
-【一致性要求】：确保人物服装、环境、光影在分镜间完全统一，动作逻辑无缝衔接。`
-
-  return systemPrompt
+  return fillTemplate(config.systemPrompts.fullSystemPrompt, {
+    directorStyle,
+    assetLibrary,
+    assetTagInstruction,
+    assetCallRule,
+    nameMappingInstruction,
+    propConsistencyRule,
+    duration,
+    shotCountText,
+    shotCountLock,
+    narrativeScaleBlock,
+    tableHeader,
+    seedanceFormat: buildSeedanceFormat(enableBGM, enableSubtitle),
+    visualStyleDesc,
+    fiveDimensionRules,
+    faithfulBlock,
+  })
 }
 
 /**
  * 构建极速瞬间模式提示词（<25s）
  */
 export function buildBurstModePrompt(options: PromptBuilderOptions): string {
-  const { director, visualStyle, duration, assets, enableBGM, enableSubtitle } = options
+  const { director, visualStyle, duration, assets, enableBGM, enableSubtitle, isFaithfulMode, isScriptImported } = options
   const config = getPromptConfig()
 
   const visualStyleDesc = getVisualStyleDescription(visualStyle)
   const directorStyle = buildDirectorStyleBlock(director)
   const assetLibrary = buildAssetLibraryBlock(assets)
   const assetCallRule = buildAssetCallRule(assets)
+  const nameMappingInstruction = buildNameMappingInstruction(assets)
+  const propConsistencyRule = buildPropConsistencyBlock(assets)
+  const faithfulSuffix = buildFaithfulSuffix(isFaithfulMode, isScriptImported, assets)
   const fiveDimensionRules = buildFiveDimensionRules()
   const burstConfig = config.routing.burst
+  const assetTagInstruction = hasAnyEnabledTagAsset(assets)
+    ? config.assetTagInstruction
+    : ""
 
-  return `你是DaoYanOS首席导演与分镜师，专注极短视频（${duration}秒）的视觉瞬间设计。
-⚡ 极速瞬间模式（≤${burstConfig.maxDuration || 25}s）：捕捉一个极具张力的瞬间，1–3 镜，每镜都是强视觉冲击画面。
-${directorStyle}
-
-${assetLibrary}
-
-${assetCallRule}
-
-【极速瞬间模式铁律（${duration}秒以下）】：
-⚡ 目标：捕捉一个极具张力的瞬间，像一张会动的顶级摄影作品。
-⚡ 只需要：一个主体、一个动作、一种强烈的情绪光影——仅此三要素。
-⚡ 完全关闭叙事模式：无起承转合、无人物弧线、无STC逻辑，直接输出视觉奇观。
-⚡ 生成 1–3 镜，每镜都是独立的强视觉冲击画面，总时长精确等于 ${duration}s。
-
-【分镜生成规则】：
-1. 输出Markdown表格：${config.tableFormat.withoutSTC}
-2. 「SEEDANCE提示词」格式：${buildSeedanceFormat(enableBGM, enableSubtitle)}
-3. 视觉基调：深度体现"${visualStyleDesc}"的视觉风格特征。
-4. ⚠️${fiveDimensionRules}`
+  return fillTemplate(config.systemPrompts.burstSystemPrompt, {
+    duration,
+    burstMaxDuration: burstConfig.maxDuration || 25,
+    directorStyle,
+    assetLibrary,
+    assetTagInstruction,
+    assetCallRule,
+    nameMappingInstruction,
+    propConsistencyRule,
+    tableHeader: config.tableFormat.withoutSTC,
+    seedanceFormat: buildSeedanceFormat(enableBGM, enableSubtitle),
+    visualStyleDesc,
+    fiveDimensionRules,
+    faithfulBlock: faithfulSuffix,
+  })
 }
 
 /**
  * 构建视觉桥梁提取提示词
  */
 export function buildBridgeExtractionPrompt(sceneContent: string): string {
-  return `请从以下分镜内容中提取【最后一镜的视觉终点状态】。
-只输出纯JSON：{"charPosition":"...","lightPhase":"...","environment":"...","keyProp":"..."}
-
-分镜内容：
-${sceneContent}`
+  const config = getPromptConfig()
+  return fillTemplate(config.systemPrompts.bridgeExtractionPrompt, {
+    sceneContent,
+  })
 }
 
 /**
@@ -459,76 +655,180 @@ export function buildStageAPrompt(
   director: Director | null,
   isSTCEnabled: boolean
 ): string {
+  const config = getPromptConfig()
   const categoryGuide = determineCategoryGuide(director, isSTCEnabled)
   const directorStyle = buildDirectorStyleBlock(director)
 
-  return `你是一位才华横溢的${categoryGuide.persona}。
-${directorStyle}
-
-【当前视频时长：${duration}秒】
-【你的核心任务】：将剧本切分为多个场次，每场有明确的节拍和时长分配。
-
-${categoryGuide.writingLogic}
-
-【输出格式】：只输出纯 JSON，禁止任何前缀、后缀、markdown代码块。
-结构：
-{
-  "scenes": [
-    {
-      "id": "scene_001",
-      "name": "场次名称",
-      "beatType": "opening|setup|catalyst|...",
-      "duration": 估计时长（秒）,
-      "contentSummary": "本场剧情摘要"
-    }
-  ],
-  "totalScenes": 场次数,
-  "narrativeMode": "burst|mini|full"
-}
-
-剧本内容：
-${plot}`
+  return fillTemplate(config.systemPrompts.stageAPrompt, {
+    persona: categoryGuide.persona,
+    directorStyle,
+    duration,
+    writingLogic: categoryGuide.writingLogic,
+    plot,
+  })
 }
 
 /**
  * 构建 Stage B 单场生成提示词
  */
 export function buildStageBPrompt(
-  sceneId: string,
-  sceneContent: string,
+  scene: Scene,
+  sceneIndex: number,
+  totalScenes: number,
+  globalOffset: number,
+  previousBridgeState: BridgeState | null,
   options: PromptBuilderOptions
-): string {
-  const basePrompt = buildFullSystemPrompt(options)
+): { systemPrompt: string; userPrompt: string } {
+  const {
+    director,
+    visualStyle,
+    isSTCEnabled,
+    isFaithfulMode,
+    isScriptImported,
+    assets,
+    shotMode = "auto",
+    customShotCount,
+    enableBGM = false,
+    enableSubtitle = true,
+  } = options
 
-  return `${basePrompt}
+  const config = getPromptConfig()
+  const categoryGuide = determineCategoryGuide(director, isSTCEnabled)
+  const isAtmosphere = categoryGuide === config.categoryGuides.atmosphere
+  const tableHeader = isSTCEnabled ? config.tableFormat.withSTC : config.tableFormat.withoutSTC
+  const directorStyle = buildDirectorStyleBlock(director)
+  const assetLibrary = buildAssetLibraryBlock(assets)
+  const assetCallRule = buildAssetCallRule(assets)
+  const nameMappingInstruction = buildNameMappingInstruction(assets)
+  const propConsistencyRule = buildPropConsistencyBlock(assets)
+  const faithfulSuffix = buildFaithfulSuffix(isFaithfulMode, isScriptImported, assets)
+  const visualStyleDesc = getVisualStyleDescription(visualStyle)
+  const assetTagInstruction = hasAnyEnabledTagAsset(assets)
+    ? config.assetTagInstruction
+    : ""
 
-【当前场次】：${sceneId}
-【本场剧本内容】：
-${sceneContent}
+  let shotCountInstruction: string
+  if (shotMode === "custom" && customShotCount) {
+    if (totalScenes > 1) {
+      const suggested = Math.max(1, Math.round(customShotCount / totalScenes))
+      shotCountInstruction = fillTemplate(config.systemPrompts.stageBShotCountPerScene, {
+        customShotCount,
+        totalScenes,
+        suggestedShotCount: suggested,
+      })
+    } else {
+      shotCountInstruction = fillTemplate(config.systemPrompts.stageBShotCountAbsolute, {
+        customShotCount,
+      })
+    }
+  } else {
+    const min = Math.max(1, Math.ceil(scene.duration / 7))
+    const max = Math.max(min, Math.ceil(scene.duration / 4))
+    shotCountInstruction = fillTemplate(config.systemPrompts.stageBShotCountRange, {
+      minShots: min,
+      maxShots: max,
+    })
+  }
 
-请为当前场次生成完整分镜表格。`
+  const endSec = globalOffset + scene.duration
+  const bridgePrompt = previousBridgeState
+    ? fillTemplate(config.systemPrompts.stageBBridgePrompt, {
+        bridgeStateJson: JSON.stringify(previousBridgeState, null, 2),
+      })
+    : ""
+
+  const narrativePrompt = !isSTCEnabled
+    ? config.systemPrompts.stageBDirectVisualization
+    : isAtmosphere
+      ? config.systemPrompts.stageBAtmosphereNarrative
+      : config.systemPrompts.stageBMiniNarrative
+
+  const tensionFormatHint = isSTCEnabled
+    ? isAtmosphere
+      ? config.systemPrompts.stageBTensionFormatAtmosphere
+      : config.systemPrompts.stageBTensionFormatStandard
+    : ""
+
+  const beatTaskInstruction = scene.beatTask
+    ? fillTemplate(config.systemPrompts.stageBBeatTaskExplicit, {
+        beatTask: scene.beatTask,
+      })
+    : scene.contentSummary
+      ? config.systemPrompts.stageBBeatTaskSummary
+      : config.systemPrompts.stageBBeatTaskGeneric
+
+  const assetConsistencyRule = hasAnyEnabledTagAsset(assets)
+    ? config.systemPrompts.stageBAssetConsistencyTagged
+    : config.systemPrompts.stageBAssetConsistencyPlain
+
+  const systemPrompt = fillTemplate(config.systemPrompts.stageBSystemPrompt, {
+    sceneNumber: sceneIndex + 1,
+    totalScenes,
+    sceneName: scene.name,
+    directorStyle,
+    assetLibrary,
+    assetTagInstruction,
+    assetCallRule,
+    nameMappingInstruction,
+    propConsistencyRule,
+    bridgePrompt,
+    startSec: globalOffset,
+    endSec,
+    sceneDuration: scene.duration,
+    shotCountInstruction,
+    narrativePrompt,
+    tableHeader,
+    tensionFormatHint,
+    seedanceFormat: buildSeedanceFormat(enableBGM, enableSubtitle),
+    visualStyleDesc,
+    fiveDimensionRules: buildFiveDimensionRules(),
+    beatTask: beatTaskInstruction,
+    assetConsistencyRule,
+    faithfulBlock: faithfulSuffix,
+  })
+
+  const dialogueLines = extractDialogueLines(scene.contentSummary || "")
+  const dialogueLockBlock = dialogueLines.length > 0
+    ? fillTemplate(config.systemPrompts.stageBDialogueLockBlock, {
+        dialogueLines: dialogueLines
+          .map((line) =>
+            fillTemplate(config.systemPrompts.stageBDialogueLockLine, {
+              dialogueLine: line,
+            })
+          )
+          .join("\n"),
+      })
+    : config.systemPrompts.stageBDialogueLockEmpty
+
+  const userPrompt = fillTemplate(config.systemPrompts.stageBUserPrompt, {
+    sceneContent: scene.contentSummary || "",
+    dialogueLockBlock,
+  })
+
+  return { systemPrompt, userPrompt }
 }
 
 /**
  * 构建单镜修改提示词
  */
 export function buildShotEditPrompt(
-  shotIndex: number,
+  shotIndex: string | number,
   requirement: string,
   currentContent: string,
-  assets: AssetState
+  assets: AssetState,
+  contextLabel = "完整"
 ): { systemPrompt: string; userPrompt: string } {
   const config = getPromptConfig()
 
-  // 构建资产相关提示词
   const assetLibrary = buildAssetLibraryBlock(assets)
   const assetCallRule = buildAssetCallRule(assets)
+  const nameMappingInstruction = buildNameMappingInstruction(assets)
 
-  // 构建系统提示词
   const systemParts = [
     config.shotEdit.systemRole,
     assetLibrary,
     assetCallRule,
+    nameMappingInstruction,
     config.shotEdit.modeConstraint,
   ].filter(Boolean)
 
@@ -536,6 +836,7 @@ export function buildShotEditPrompt(
 
   // 构建用户提示词
   const userPrompt = config.shotEdit.userTaskTemplate
+    .replace(/{contextLabel}/g, contextLabel)
     .replace(/{shotIndex}/g, String(shotIndex))
     .replace(/{requirement}/g, requirement)
     .replace(/{currentContent}/g, currentContent)

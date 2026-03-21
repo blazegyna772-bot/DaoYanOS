@@ -6,7 +6,7 @@
 export interface LogEntry {
   id: string
   timestamp: string
-  type: 'api' | 'sse' | 'parse' | 'error' | 'info'
+  type: 'api' | 'sse' | 'parse' | 'error' | 'info' | 'success'
   label: string
   data: unknown
   duration?: number
@@ -95,6 +95,11 @@ class DevLogger {
   // 信息日志
   info(label: string, data: unknown) {
     this.addLog('info', label, data)
+  }
+
+  // 成功日志
+  success(label: string, data: unknown) {
+    this.addLog('success', label, data)
   }
 
   // 记录 API 请求

@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2019",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "rootDir": ".",
+    "outDir": ".tmp/source-chain-regression",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "noEmit": false,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ]
+    }
+  },
+  "include": [
+    "scripts/source-chain-regression.ts",
+    "src/lib/chainEngine.ts",
+    "src/lib/promptBuilder.ts",
+    "src/lib/promptLoader.ts",
+    "src/types/index.ts"
+  ]
+}

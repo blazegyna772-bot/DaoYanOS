@@ -18,6 +18,7 @@ const typeColors: Record<LogEntry['type'], string> = {
   parse: 'text-yellow-400',
   error: 'text-red-400',
   info: 'text-gray-400',
+  success: 'text-emerald-400',
 }
 
 const typeLabels: Record<LogEntry['type'], string> = {
@@ -26,6 +27,7 @@ const typeLabels: Record<LogEntry['type'], string> = {
   parse: '解析',
   error: '错误',
   info: '信息',
+  success: '成功',
 }
 
 const typeBgColors: Record<LogEntry['type'], string> = {
@@ -34,6 +36,7 @@ const typeBgColors: Record<LogEntry['type'], string> = {
   parse: 'bg-yellow-500/20',
   error: 'bg-red-500/20',
   info: 'bg-gray-500/20',
+  success: 'bg-emerald-500/20',
 }
 
 export function DevLogPanel({ isOpen, onClose }: DevLogPanelProps) {
@@ -114,6 +117,7 @@ export function DevLogPanel({ isOpen, onClose }: DevLogPanelProps) {
             <option value="sse">SSE</option>
             <option value="parse">解析</option>
             <option value="error">错误</option>
+            <option value="success">成功</option>
           </select>
           {/* 暂停 */}
           <Button

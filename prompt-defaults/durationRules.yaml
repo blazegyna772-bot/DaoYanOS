@@ -1,0 +1,120 @@
+# 时长路由规则
+# 来源：soullensV5.1.html - determineNarrativeMode
+# 用途：根据总时长决定生成策略
+
+# 路由规则
+routing:
+  burst:
+    maxDuration: 25
+    description: "极速瞬间模式"
+    shotCount: "1-3 镜"
+    rules:
+      - "捕捉一个极具张力的瞬间，像一张会动的顶级摄影作品"
+      - "只需要：一个主体、一个动作、一种强烈的情绪光影"
+      - "完全关闭叙事模式：无起承转合、无人物弧线、无STC逻辑"
+      - "每镜都是独立的强视觉冲击画面"
+    wordLimit: "50字以内"
+
+  mini:
+    minDuration: 25
+    maxDuration: 85
+    description: "迷你弧线模式"
+    shotCount: "自动计算：min(floor(duration/15), ceil(duration/5))"
+    rules:
+      - "这是一个迷你故事，重点在于情境设置和一个小反转"
+      - "结构：开场铺垫 → 变故发生 → 冒险展开 → 峰回路转 → 终章闭环"
+      - "场景动力学规则：每一镜必须有情绪转折和冲突标注"
+    wordLimit: "150-500字"
+
+  full:
+    minDuration: 85
+    description: "链式生成模式（ChainEngine）"
+    shotCount: "按节拍分配"
+    rules:
+      - "完整STC节拍结构"
+      - "Stage A: 剧本切分场次"
+      - "Stage B: 逐场生成分镜"
+      - "Stage C: 整合输出"
+      - "每场携带bridgeState视觉桥梁"
+    wordLimit: "按场次分配"
+
+
+# 时长对应的扩写规格
+expansionSpecs:
+  - maxDuration: 10
+    wordCount: "50字以内"
+    description: "极速瞬间，只保留一个最核心、最具冲击力的画面动作"
+    constraint: "不要背景交代，不要情绪旁白，不要过渡描写"
+
+  - minDuration: 10
+    maxDuration: 20
+    wordCount: "80-120字"
+    description: "极简扼要，只保留最核心的画面意象与情绪张力"
+    constraint: "每句话都是精华"
+
+  - minDuration: 20
+    maxDuration: 45
+    wordCount: "150-250字"
+    description: "简洁有力，突出核心场景、主要情绪和关键动作"
+    constraint: "禁止无法视觉化的感性旁白"
+
+  - minDuration: 45
+    maxDuration: 90
+    wordCount: "300-500字"
+    description: "有层次地展开情节，场景描写细腻，人物情绪饱满"
+    constraint: "每段情绪描写必须附带对应的视觉证据"
+
+  - minDuration: 90
+    maxDuration: 180
+    wordCount: "600-900字"
+    description: "丰富完整的故事叙述，深度刻画人物弧线"
+    constraint: "人物心理弧线必须全部外化为行为序列"
+
+  - minDuration: 180
+    wordCount: "1000-1500字"
+    description: "长篇深度叙述，多层次情节展开"
+    constraint: "每个场景转换必须有明确的视觉触发点"
+
+
+# 镜头数量计算
+shotCountCalculation:
+  auto:
+    description: "根据时长自动计算"
+    formula: |
+      const min = Math.max(1, Math.floor(duration / 15));
+      const max = Math.max(min, Math.ceil(duration / 5));
+      return { min, max: Math.min(max, min * 3) };
+
+  custom:
+    description: "用户指定固定镜数"
+    constraint: "必须恰好生成指定数量，不得多于或少于"
+
+
+# 叙事规模（仅STC开启时）
+narrativeScale:
+  mini:
+    description: "迷你弧线模式"
+    rules:
+      - "+/- 情绪转折：每一镜结束时情绪张力必须发生方向性转变"
+      - ">< 冲突标注：每一镜必须暗示或明示阻碍主角的障碍"
+      - "泳池里的教皇：交代背景信息时必须加入娱乐性视觉背景细节"
+
+  atmosphere:
+    description: "情绪意境模式"
+    rules:
+      - "这是一个氛围/意境短片，禁止强行套入冲突结构"
+      - "节奏：起（建立情绪锚点）→ 承（深化意象）→ 转（情绪偏移）→ 合（收束留余韵）"
+      - "每一镜延伸或变奏上一镜的核心意象"
+      - "戏剧张力列只需标注情绪细微偏移，禁止填写冲突障碍格式"
+
+
+# 极速瞬间模式特殊规则
+burstMode:
+  header: |
+    ⚡ 极速瞬间模式（≤{duration}s）：捕捉一个极具张力的瞬间
+  rules:
+    - "目标：捕捉一个极具张力的瞬间，像一张会动的顶级摄影作品"
+    - "只需要：一个主体、一个动作、一种强烈的情绪光影——仅此三要素"
+    - "完全关闭叙事模式：无起承转合、无人物弧线、无STC逻辑"
+    - "直接输出视觉奇观"
+    - "生成 1-3 镜，每镜都是独立的强视觉冲击画面"
